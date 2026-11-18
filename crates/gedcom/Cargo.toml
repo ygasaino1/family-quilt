@@ -1,0 +1,16 @@
+[package]
+name = "family-gedcom"
+description = "GEDCOM 5.5.1 / 7.0 import and export (with PEDI), and a synthetic tree generator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+family-store = { path = "../store" }
+family-families = { path = "../families" }
+thiserror = "2"
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"

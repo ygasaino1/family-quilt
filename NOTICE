@@ -1,0 +1,13 @@
+family-quilt
+Copyright (c) 2026 family-quilt contributors (MIT, see LICENSE)
+
+THIRD-PARTY CODE
+As of Phase 1 no GeneaQuilts source code has been ported. When the layout /
+ranking logic is ported (Phase 2+), the following notice MUST be reproduced here,
+in a header of each ported file, in the app's About/Licenses screen and in the README:
+
+  GeneaQuilts: Copyright 2010-2014 Jean-Daniel Fekete, Pierre Dragicevic and INRIA.
+  Distributed under the BSD license found in the LICENSE file of
+  https://github.com/jdfekete/geneaquilt  (redistribution conditions and
+  disclaimer reproduced verbatim from that file; the names INRIA and the authors
+  may not be used to endorse or promote this product).

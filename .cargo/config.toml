@@ -1,0 +1,3 @@
+# Windows: link the C runtime statically so the release exe needs no extra DLLs (spec section 17).
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

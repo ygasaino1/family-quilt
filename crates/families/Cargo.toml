@@ -1,0 +1,14 @@
+[package]
+name = "family-families"
+description = "Derives quilt family columns from people and parent/partner links (pure function)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+family-store = { path = "../store" }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1.0.154"
