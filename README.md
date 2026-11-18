@@ -2,7 +2,7 @@
 
 A local desktop app for a real family's genealogy: the **GeneaQuilts** matrix view (rows = people, columns = families), SQLite storage, non-biological parent links (adopted, foster, step, guardian, ...), an AI-agent-friendly review flow, and fast "how are A and B related?".
 
-Status: **Phases 1 and 2 of 6 done (Phase 2 waits at Gate B)** (store layer). Specification: `docs/spec-prompt.md`. Decisions so far: `docs/decisions.md`. Analysis of the original: `docs/geneaquilts-analysis.md`.
+Status: **Phases 1 to 3 of 6 done (Gate B accepted)** (store layer). Specification: `docs/spec-prompt.md`. Decisions so far: `docs/decisions.md`. Analysis of the original: `docs/geneaquilts-analysis.md`.
 
 ## What exists today
 

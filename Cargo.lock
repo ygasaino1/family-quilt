@@ -179,6 +179,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "family-relate"
+version = "0.1.0"
+dependencies = [
+ "family-families",
+ "family-gedcom",
+ "family-store",
+ "serde",
+]
+
+[[package]]
 name = "family-store"
 version = "0.1.0"
 dependencies = [

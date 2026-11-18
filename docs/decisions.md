@@ -32,3 +32,9 @@ Phase 1 needs crates.io. Network for package installs was blocked in the Phase 0
 - Import is planned first (`ImportPlan`) and applied in one transaction (`Store::atomic`); invalid links are skipped with line-numbered warnings.
 - Cycle check query pinned to `idx_rel_b` with `INDEXED BY` because the planner otherwise scanned all parent links.
 - Own round-trip data goes in `NOTE family-quilt:*` and `_FQ*` tags, which other programs ignore.
+
+## Phase 3
+- Gate B accepted as proposed.
+- `family-relate` works on the `Graph` snapshot only; no SQL. No new external dependency.
+- Half-sibling/half-cousin = exactly one recorded shared common ancestor.
+- Non-birth steps cost 1 + 0.001 so a birth route wins ties.
