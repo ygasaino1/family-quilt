@@ -198,6 +198,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "family-review"
+version = "0.1.0"
+dependencies = [
+ "family-families",
+ "family-relate",
+ "family-store",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "family-store"
 version = "0.1.0"
 dependencies = [

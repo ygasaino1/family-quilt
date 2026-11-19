@@ -397,6 +397,15 @@ impl Store {
         ids.iter().map(|id| load_person(&self.conn, ctx, id)).collect()
     }
 
+    /// One name entry with the person it belongs to.
+    pub fn find_name(&self, ctx: &AccessContext, name_id: &str) -> Result<(String, PersonName)> {
+        let person_id: Option<String> = self.conn.query_row("SELECT person_id FROM person_name WHERE id = ?1 AND deleted_at IS NULL", [name_id], |r| r.get(0)).optional()?;
+        let person_id = person_id.ok_or_else(|| StoreError::NotFound { kind: "name", id: name_id.to_string() })?;
+        load_person(&self.conn, ctx, &person_id)?; // visible and not deleted
+        let name = load_names(&self.conn, &person_id)?.into_iter().find(|n| n.id == name_id).ok_or_else(|| StoreError::NotFound { kind: "name", id: name_id.to_string() })?;
+        Ok((person_id, name))
+    }
+
     // ───────────────────────────── search ─────────────────────────────
 
     pub fn search_people(&self, ctx: &AccessContext, q: &SearchQuery) -> Result<Vec<PersonSummary>> {
