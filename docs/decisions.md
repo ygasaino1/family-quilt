@@ -49,3 +49,10 @@ Phase 1 needs crates.io. Network for package installs was blocked in the Phase 0
 - `layout_with_hint` keeps the previous order for stability.
 
 - Layout modes (user decision): both tree-by-tree (default) and layer-by-layer are available. Layer-by-layer defaults to `Align::Top` (the original, no dates needed). `Align::BirthDate` stays only as an optional extra.
+
+## Gate E closed (user)
+- Option A for big trees: show a quick layout first (stays still, user can scroll/search/select), compute the careful layout in the background, cache the result with the file, keep the order after edits (hint).
+- Progress strip with real stage + score ("Ranking generations... ordering... polishing (crossings a -> b)") and a "keep current layout" button; one smooth ~0.5 s re-arrangement at the end, selection stays on the same people; instant if the system asks for reduced motion.
+- Optional setting "show live progress" (off by default): a few intermediate states (after ranking, ordering, polishing).
+- Engine to add later (app side): progress callback with stage, fraction, current score, and a snapshot at those points.
+- Release scope proposal (v1 / after release per inventory row) is due before Phase 5; Gate D moves after the first release.
