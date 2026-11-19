@@ -38,3 +38,12 @@ Phase 1 needs crates.io. Network for package installs was blocked in the Phase 0
 - `family-relate` works on the `Graph` snapshot only; no SQL. No new external dependency.
 - Half-sibling/half-cousin = exactly one recorded shared common ancestor.
 - Non-birth steps cost 1 + 0.001 so a birth route wins ties.
+
+- Half-sibling: confirmed by the user, keep as is (exactly one recorded shared parent reads half-sibling).
+
+## Layout engine (before Phase 4)
+- Score = quilt line crossings + row-line length (+ column-line length reported), defined on the final row/column order only.
+- Trees are placed one after another (largest first, people alone last), not layer-major across trees.
+- Ranking: network simplex on person -> column -> child (trees up to 12,000 nodes); simple compaction above that.
+- Ordering: depth-first start, mean/median sweeps (4 variants), neighbour-swap refinement on the real score within a deterministic work budget.
+- `layout_with_hint` keeps the previous order for stability.

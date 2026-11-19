@@ -1,0 +1,14 @@
+[package]
+name = "family-layout"
+description = "Layout engine for the quilt: generation per person, row order and column order (pure, no UI)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+family-store = { path = "../store" }
+family-families = { path = "../families" }
+
+[dev-dependencies]
+family-gedcom = { path = "../gedcom" }
