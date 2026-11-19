@@ -14,7 +14,7 @@ struct CompResult {
     cols: Vec<u32>,
 }
 
-pub(crate) fn layout(people: usize, tiebreak: &[i64], families: &[FamilyIn], hint: Option<&crate::Hint>) -> Layout {
+pub(crate) fn layout(people: usize, tiebreak: &[i64], families: &[FamilyIn], options: &crate::Options, hint: Option<&crate::Hint>) -> Layout {
     let ranks = rank(people, families);
     let nf = families.len();
 
@@ -57,6 +57,9 @@ pub(crate) fn layout(people: usize, tiebreak: &[i64], families: &[FamilyIn], hin
     let mut out = Layout { person_gen: vec![0; people], family_gen: vec![0; nf], person_tree: vec![0; people], family_tree: vec![0; nf], forced_nodes: ranks.forced, ..Default::default() };
     let mut local_p = vec![0u32; people];
     let mut local_f = vec![0u32; nf];
+    let n_linked = linked.len();
+    let mut tree_rows: Vec<Vec<u32>> = Vec::new();
+    let mut tree_cols: Vec<Vec<u32>> = Vec::new();
     for (tree, &r) in linked.iter().chain(singles.iter()).enumerate() {
         let persons = &comp_persons[r as usize];
         let fams = &comp_fams[r as usize];
@@ -70,7 +73,8 @@ pub(crate) fn layout(people: usize, tiebreak: &[i64], families: &[FamilyIn], hin
             out.family_tree[f as usize] = tree as u32;
         }
         if fams.is_empty() {
-            out.rows.extend(persons);
+            tree_rows.push(persons.clone());
+            tree_cols.push(Vec::new());
             continue;
         }
         for (i, &p) in persons.iter().enumerate() {
@@ -81,12 +85,69 @@ pub(crate) fn layout(people: usize, tiebreak: &[i64], families: &[FamilyIn], hin
         }
         let ctx = Ctx { tiebreak, families, as_parent: &as_parent, as_child: &as_child, person_gen: &out.person_gen, family_gen: &out.family_gen, local_p: &local_p, local_f: &local_f, hint };
         let res = order_component(&ctx, persons, fams);
-        out.rows.extend(res.rows);
-        out.cols.extend(res.cols);
+        tree_rows.push(res.rows);
+        tree_cols.push(res.cols);
     }
+    assemble(&mut out, options, tiebreak, n_linked, &tree_rows, &tree_cols);
     let cells = cells_of(families);
     out.score = quilt_score(&invert(&out.rows), &invert(&out.cols), &cells);
     out
+}
+
+/// Put the trees' blocks into the final row and column order (see [`crate::Mode`]).
+fn assemble(out: &mut Layout, options: &crate::Options, tiebreak: &[i64], n_linked: usize, tree_rows: &[Vec<u32>], tree_cols: &[Vec<u32>]) {
+    use crate::{Align, Mode};
+    let Mode::LayerByLayer(align) = options.mode else {
+        out.rows = tree_rows.concat();
+        out.cols = tree_cols.concat();
+        return;
+    };
+    // Shift (in layers; one generation = 2 layers) per tree.
+    let mut shift = vec![0u32; n_linked];
+    if let Align::BirthDate { generation_years } = align {
+        let gy = f64::from(generation_years.max(1));
+        let year = |day: i64| 1970.0 + day as f64 / 365.2425;
+        // estimated birth year of each tree's generation 0
+        let est: Vec<Option<f64>> = (0..n_linked)
+            .map(|t| {
+                let xs: Vec<f64> = tree_rows[t].iter().filter(|&&p| tiebreak[p as usize] != i64::MAX).map(|&p| year(tiebreak[p as usize]) - gy * (out.person_gen[p as usize] as f64 / 2.0)).collect();
+                (!xs.is_empty()).then(|| xs.iter().sum::<f64>() / xs.len() as f64)
+            })
+            .collect();
+        if let Some(base) = est.iter().flatten().copied().reduce(f64::min) {
+            for t in 0..n_linked {
+                if let Some(y0) = est[t] {
+                    shift[t] = 2 * ((y0 - base) / gy).round() as u32;
+                }
+            }
+        }
+        for t in 0..n_linked {
+            for &p in &tree_rows[t] {
+                out.person_gen[p as usize] += shift[t];
+            }
+            for &f in &tree_cols[t] {
+                out.family_gen[f as usize] += shift[t];
+            }
+        }
+    }
+    // rows by (generation, tree, position in tree); people in no family last
+    let mut rows: Vec<(u32, u32, u32, u32)> = Vec::new();
+    for (t, rs) in tree_rows.iter().enumerate() {
+        for (i, &p) in rs.iter().enumerate() {
+            let g = if t < n_linked { out.person_gen[p as usize] } else { u32::MAX };
+            rows.push((g, t as u32, i as u32, p));
+        }
+    }
+    rows.sort_unstable();
+    out.rows = rows.iter().map(|r| r.3).collect();
+    let mut cols: Vec<(u32, u32, u32, u32)> = Vec::new();
+    for (t, cs) in tree_cols.iter().enumerate() {
+        for (i, &f) in cs.iter().enumerate() {
+            cols.push((out.family_gen[f as usize], t as u32, i as u32, f));
+        }
+    }
+    cols.sort_unstable();
+    out.cols = cols.iter().map(|r| r.3).collect();
 }
 
 struct Ctx<'a> {

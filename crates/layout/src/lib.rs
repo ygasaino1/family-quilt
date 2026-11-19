@@ -8,8 +8,11 @@
 //! 2. **Ordering** ([`order`]): per connected tree, barycentre sweeps over the layers
 //!    person / family / person / ..., starting from a depth-first order. The best sweep by the
 //!    quilt score ([`score`]) wins.
-//! 3. **Output**: trees one after another (largest first), each as its own diagonal of blocks.
-//!    Rows are sorted by (tree, generation, position), columns by (tree, generation, position).
+//! 3. **Output**: two modes ([`Mode`]). *Tree by tree* (default): trees one after another (largest first),
+//!    each its own diagonal of blocks; rows sorted by (tree, generation, position). *Layer by layer*
+//!    (as GeneaQuilts): rows sorted by (generation, tree, position), so a band is one generation across
+//!    all trees; optionally trees are shifted so their generations match by birth year ([`Align`]).
+//!    People in no family always come last. The order inside a tree is the same in both modes.
 //!
 //! Everything is deterministic: ties are broken by birth date (earliest possible day) and then by
 //! the person's index (= creation order).
@@ -82,8 +85,12 @@ pub fn input_from_derived(d: &Derived) -> Vec<FamilyIn> {
 
 /// Lay out a derived graph. People that are in no family keep a row (after the linked trees).
 pub fn layout_graph(g: &Graph, d: &Derived) -> Layout {
+    layout_graph_with(g, d, &Options::default())
+}
+
+pub fn layout_graph_with(g: &Graph, d: &Derived, options: &Options) -> Layout {
     let tiebreak: Vec<i64> = g.people.iter().map(|p| p.birth.map(|b| b.earliest_day() as i64).unwrap_or(i64::MAX)).collect();
-    layout(g.people.len(), &tiebreak, &input_from_derived(d))
+    layout_with_options(g.people.len(), &tiebreak, &input_from_derived(d), options, None)
 }
 
 /// Where things were in the previous layout (positions in the old row / column order), by current
@@ -96,14 +103,45 @@ pub struct Hint {
     pub family_pos: Vec<Option<u32>>,
 }
 
+/// How separate (unconnected) trees share the quilt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Mode {
+    /// One tree after another, each its own diagonal of blocks. No crossings between unrelated trees.
+    #[default]
+    TreeByTree,
+    /// Like GeneaQuilts: all trees' generation 0 first, then all generation 1, and so on, so a band of
+    /// rows is "everyone of that generation". Lines of unrelated trees can cross.
+    LayerByLayer(Align),
+}
+
+/// Which generation of one tree sits next to which generation of another in [`Mode::LayerByLayer`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Align {
+    /// The top of every tree is generation 0 (the original's behaviour).
+    Top,
+    /// Shift a tree down so that its generations match the birth years of the other trees
+    /// (`generation_years` per generation, 25 is a good default). Trees with no dates stay at the top.
+    BirthDate { generation_years: u32 },
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Options {
+    pub mode: Mode,
+}
+
 /// `tiebreak[p]`: smaller sorts first (birth day, or `i64::MAX`). Equal keys fall back to the index.
 pub fn layout(people: usize, tiebreak: &[i64], families: &[FamilyIn]) -> Layout {
-    order::layout(people, tiebreak, families, None)
+    order::layout(people, tiebreak, families, &Options::default(), None)
 }
 
 /// Like [`layout`], but starts from the previous order (see [`Hint`]).
 pub fn layout_with_hint(people: usize, tiebreak: &[i64], families: &[FamilyIn], hint: &Hint) -> Layout {
-    order::layout(people, tiebreak, families, Some(hint))
+    order::layout(people, tiebreak, families, &Options::default(), Some(hint))
+}
+
+/// The general entry point: choose the mode, optionally start from a previous layout.
+pub fn layout_with_options(people: usize, tiebreak: &[i64], families: &[FamilyIn], options: &Options, hint: Option<&Hint>) -> Layout {
+    order::layout(people, tiebreak, families, options, hint)
 }
 
 /// Same as the internal helper; public for tools and tests.

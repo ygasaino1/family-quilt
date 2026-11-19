@@ -242,3 +242,83 @@ fn one_edit_moves_little() {
         assert!(discordant(&base.rows, &cold.rows, |x| (x as usize) < np) < 0.10, "without hint");
     }
 }
+
+fn three_trees() -> (usize, Vec<i64>, Vec<FamilyIn>) {
+    // Tree 0 (A..): 3 generations. Tree 1 (B..): 2 generations. Tree 2 (C..): 2 generations. P8 is alone.
+    // people: 0 A1 1 A2 2 A3 3 A4 4 A5 | 5 B1 6 B2 7 B3 | 8 C1 9 C2 10 C3 | 11 Solo
+    let f = |p: &[u32], c: &[u32]| FamilyIn { parents: p.to_vec(), children: c.to_vec() };
+    let fams = vec![f(&[0, 1], &[2]), f(&[2, 3], &[4]), f(&[5, 6], &[7]), f(&[8, 9], &[10])];
+    (12, vec![i64::MAX; 12], fams)
+}
+
+#[test]
+fn layer_by_layer_puts_a_generation_in_one_band() {
+    let (n, tb, fams) = three_trees();
+    let tree = layout(n, &tb, &fams);
+    let lay = layout_with_options(n, &tb, &fams, &Options { mode: Mode::LayerByLayer(Align::Top) }, None);
+    // permutation, same trees
+    assert_eq!(lay.rows.len(), n);
+    assert_eq!(lay.cols.len(), fams.len());
+    assert_eq!(lay.person_tree, tree.person_tree, "same trees in both modes");
+    // rows sorted by (generation, tree); the person in no family is last
+    let keys: Vec<(u32, u32)> = lay.rows.iter().take(n - 1).map(|&p| (lay.person_gen[p as usize], lay.person_tree[p as usize])).collect();
+    assert!(keys.windows(2).all(|w| w[0] <= w[1]), "{keys:?}");
+    assert_eq!(*lay.rows.last().unwrap(), 11);
+    // a band: all generation-0 people come before any generation-1 person
+    let first_gen1 = lay.rows.iter().position(|&p| lay.person_gen[p as usize] > 0).unwrap();
+    assert!(lay.rows[..first_gen1].iter().all(|&p| lay.person_gen[p as usize] == 0));
+    assert_eq!(first_gen1, 2 + 2 + 2, "A1 A2 B1 B2 C1 C2");
+    // inside each tree the relative order is the same as in tree-by-tree mode
+    for t in 0..3u32 {
+        let pick = |l: &Layout| l.rows.iter().copied().filter(|&p| l.person_tree[p as usize] == t && p != 11).collect::<Vec<_>>();
+        assert_eq!(pick(&lay), pick(&tree));
+        let pickc = |l: &Layout| l.cols.iter().copied().filter(|&f| l.family_tree[f as usize] == t).collect::<Vec<_>>();
+        assert_eq!(pickc(&lay), pickc(&tree));
+    }
+    // the layer-by-layer picture of unrelated trees has crossings; tree-by-tree has none
+    assert_eq!(tree.score.crossings, 0);
+    assert!(lay.score.crossings > 0);
+    // and it is deterministic
+    let again = layout_with_options(n, &tb, &fams, &Options { mode: Mode::LayerByLayer(Align::Top) }, None);
+    assert_eq!((again.rows, again.cols), (lay.rows, lay.cols));
+}
+
+#[test]
+fn birth_dates_line_up_generations_across_trees() {
+    // Tree B is one century younger than tree A: its top generation should sit next to A's 4th generation.
+    let day = |year: i64| ((year - 1970) as f64 * 365.2425) as i64;
+    let f = |p: &[u32], c: &[u32]| FamilyIn { parents: p.to_vec(), children: c.to_vec() };
+    // A: A0 -> A1 -> A2 -> A3 -> A4 -> A5 (a single line of couples, each generation 25 years later)
+    let mut fams = Vec::new();
+    let mut tb = Vec::new();
+    // people 0..=5 = A0..A5 (one parent each), 6..=7 = B0 B1 (B0 parent of B1)
+    for g in 0..6 {
+        tb.push(day(1800 + 25 * g));
+    }
+    for g in 0..5 {
+        fams.push(f(&[g], &[g + 1]));
+    }
+    tb.push(day(1900));
+    tb.push(day(1925));
+    fams.push(f(&[6], &[7]));
+    let n = 8;
+    let top = layout_with_options(n, &tb, &fams, &Options { mode: Mode::LayerByLayer(Align::Top) }, None);
+    assert_eq!(top.person_gen[6], 0);
+    let dated = layout_with_options(n, &tb, &fams, &Options { mode: Mode::LayerByLayer(Align::BirthDate { generation_years: 25 }) }, None);
+    // B0 (born 1900) is four generations after A0 (born 1800): same band as A4 (born 1900)
+    assert_eq!(dated.person_gen[6], dated.person_gen[4], "B0 sits in A4's band");
+    assert_eq!(dated.person_gen[7], dated.person_gen[5]);
+    let pos = dated.row_pos();
+    assert!(pos[4].abs_diff(pos[6]) <= 1, "and the rows are next to each other");
+    check_perm(&dated, n, &fams);
+}
+
+fn check_perm(l: &Layout, people: usize, fams: &[FamilyIn]) {
+    let mut r = l.rows.clone();
+    r.sort_unstable();
+    assert_eq!(r, (0..people as u32).collect::<Vec<_>>());
+    let mut c = l.cols.clone();
+    c.sort_unstable();
+    assert_eq!(c, (0..fams.len() as u32).collect::<Vec<_>>());
+    assert_eq!(l.score, quilt_score(&l.row_pos(), &l.col_pos(), &cells_of(fams)));
+}
