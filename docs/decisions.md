@@ -47,3 +47,5 @@ Phase 1 needs crates.io. Network for package installs was blocked in the Phase 0
 - Ranking: network simplex on person -> column -> child (trees up to 12,000 nodes); simple compaction above that.
 - Ordering: depth-first start, mean/median sweeps (4 variants), neighbour-swap refinement on the real score within a deterministic work budget.
 - `layout_with_hint` keeps the previous order for stability.
+
+- Layout modes (user decision): both tree-by-tree (default) and layer-by-layer are available. Layer-by-layer defaults to `Align::Top` (the original, no dates needed). `Align::BirthDate` stays only as an optional extra.

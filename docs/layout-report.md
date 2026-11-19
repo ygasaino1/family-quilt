@@ -70,3 +70,11 @@ Fast score equals brute force; known score by hand; nuclear family; hard cases (
 3. `layout_with_hint` still re-ranks; storing the layers in the database would remove that cost later.
 4. Samples: the original's `.ged` files are not committed (their licence is unknown); they were read from a scratch clone. `Ragusan.ged` is not UTF-8 and was read as Latin-1 for this test; our importer rejects it by design (ANSEL/other encodings are not supported yet).
 5. Windows is still not verified.
+
+## 9. Update: layer-by-layer mode (the original's generation bands)
+You asked for the original's layer-by-layer order as well. It is in (`Mode::LayerByLayer(Align)`), default stays tree-by-tree.
+* **What it does:** rows sorted by (generation, tree, position), columns likewise, so one band of rows = one generation across all trees. People in no family stay last. Inside each tree the order is exactly the tree-by-tree order (proved by test): the within-tree objective is the same in both modes, only the concatenation differs.
+* **`Align::Top`** = the original: the top of every tree is generation 0. It uses no dates, like the original (its layers come from graph structure only; its date-based `fixLayersByDate` is commented out).
+* **`Align::BirthDate { generation_years }`** is an optional extra, not in the original: shifts a tree down so its generations match the other trees' birth years. Trees without dates stay at the top, so files without birth dates behave exactly like `Align::Top`.
+* **Score vs Graphviz as the original uses it:** no worse than "dot original" on all 15 real files and 2 synthetic ones (`docs/gate-e-layer-table.txt`). Example, Bible (several trees): ours 379 crossings / 1559 row-line vs 1196 / 1669; royal92 21606 / 55252 vs 39168 / 63198. Where a file is a single tree the two modes are identical.
+* Tests: 9 in `family-layout` (the two new ones check the band layout, same inner order, determinism, and date alignment).
