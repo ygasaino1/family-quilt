@@ -1,0 +1,26 @@
+[package]
+name = "family-server"
+description = "Localhost HTTP server: the browser door (/api), the agent door (/agent/v1), MCP (/agent/mcp) and the stdio bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "family-app"
+path = "src/main.rs"
+
+[dependencies]
+family-store = { path = "../store" }
+family-review = { path = "../review" }
+family-relate = { path = "../relate" }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+getrandom = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
+
+[dev-dependencies]
+tempfile = "3"

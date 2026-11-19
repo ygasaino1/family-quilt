@@ -272,21 +272,24 @@ impl Store {
                         let v = st.query_map([], |r| r.get::<_, String>(1))?.collect::<std::result::Result<Vec<_>, _>>()?;
                         v
                     };
+                    // One statement for all columns: table CHECKs (date and qualifier together) hold only for the whole row.
+                    let mut sets: Vec<String> = vec![];
+                    let mut vals: Vec<rusqlite::types::Value> = vec![rusqlite::types::Value::Text(id.clone())];
                     for (k, v) in obj {
                         if k == "id" || k == "updated_at" || !cols.contains(k) || !ident_ok(k) {
                             continue;
                         }
-                        let sql = format!("UPDATE {table} SET {k} = ?2 WHERE id = ?1");
-                        match v {
-                            Value::Null => s.conn.execute(&sql, params![id, Option::<String>::None])?,
-                            Value::Bool(x) => s.conn.execute(&sql, params![id, *x as i64])?,
-                            Value::Number(n) => match n.as_i64() {
-                                Some(i) => s.conn.execute(&sql, params![id, i])?,
-                                None => s.conn.execute(&sql, params![id, n.as_f64()])?,
-                            },
-                            Value::String(x) => s.conn.execute(&sql, params![id, x])?,
-                            _ => 0,
-                        };
+                        vals.push(match v {
+                            Value::Null => rusqlite::types::Value::Null,
+                            Value::Bool(x) => rusqlite::types::Value::Integer(*x as i64),
+                            Value::Number(n) => n.as_i64().map(rusqlite::types::Value::Integer).unwrap_or_else(|| rusqlite::types::Value::Real(n.as_f64().unwrap_or(0.0))),
+                            Value::String(x) => rusqlite::types::Value::Text(x.clone()),
+                            _ => continue,
+                        });
+                        sets.push(format!("{k} = ?{}", vals.len()));
+                    }
+                    if !sets.is_empty() {
+                        s.conn.execute(&format!("UPDATE {table} SET {} WHERE id = ?1", sets.join(", ")), rusqlite::params_from_iter(vals.iter()))?;
                     }
                     s.conn.execute(&format!("UPDATE {table} SET updated_at = ?2 WHERE id = ?1"), params![id, t])?;
                 }

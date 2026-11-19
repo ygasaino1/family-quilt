@@ -2,7 +2,7 @@
 
 A local desktop app for a real family's genealogy: the **GeneaQuilts** matrix view (rows = people, columns = families), SQLite storage, non-biological parent links (adopted, foster, step, guardian, ...), an AI-agent-friendly review flow, and fast "how are A and B related?".
 
-Status: **Phases 1 to 3 and the layout engine done (Gate E waits for your answer)** (store layer). Specification: `docs/spec-prompt.md`. Decisions so far: `docs/decisions.md`. Analysis of the original: `docs/geneaquilts-analysis.md`.
+Status: **Phases 1 to 3 and the layout engine done (Gate E is closed for your answer)** (store layer). Specification: `docs/spec-prompt.md`. Decisions so far: `docs/decisions.md`. Analysis of the original: `docs/geneaquilts-analysis.md`.
 
 ## What exists today
 
@@ -49,3 +49,11 @@ Build tools: C compiler and Perl (OpenSSL), dev only.
 
 ## Licence
 New code: MIT (`LICENSE`). No GeneaQuilts code is ported yet; when it is, the BSD notice goes into `NOTICE`, file headers and the About screen. Sample `.ged` files from the original are not shipped.
+
+## Phase 4: dependencies added
+
+- `axum` + `tokio`: the localhost HTTP server (spec section 4).
+- `tracing-subscriber`: log output of the headless binary.
+- `getrandom`: the agent token and MCP session ids.
+
+The stdio bridge uses a hand-written localhost HTTP/1.1 client over `std::net::TcpStream` instead of an HTTP client crate (one fewer dependency; it only ever talks to 127.0.0.1).

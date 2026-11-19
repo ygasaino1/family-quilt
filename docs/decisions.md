@@ -56,3 +56,31 @@ Phase 1 needs crates.io. Network for package installs was blocked in the Phase 0
 - Optional setting "show live progress" (off by default): a few intermediate states (after ranking, ordering, polishing).
 - Engine to add later (app side): progress callback with stage, fraction, current score, and a snapshot at those points.
 - Release scope proposal (v1 / after release per inventory row) is due before Phase 5; Gate D moves after the first release.
+
+## Phase 4 (HTTP, both doors, proposals, MCP)
+
+**Crates.** `family-review` (no HTTP: submit/validate, review view, warnings, approve/reject, query side) and `family-server` (axum; `/api`, `/agent/v1`, `/agent/mcp`, the `family-app` binary with `--mcp-stdio`). All SQL stays in `family-store` (`review.rs`: proposals, changes, undo).
+
+**Doors.** Every request needs a localhost `Host` (and a localhost `Origin` if one is sent). `/api/*` additionally needs `Sec-Fetch-Site: same-origin|none` (missing = refused). `/agent/*` needs the bearer token (constant-time compare). The agent token does not open `/api`. Known limit: a native program on this PC can forge `Sec-Fetch-Site`; the header protects against websites, not against local malware, as the spec intends.
+
+**Agent powers** are defined once in `ops.rs`; HTTP and MCP both call it: guide, search, person, relationship, graph, create proposal, list own proposals. No route or tool exists for edit, delete, approve, reject or undo (tested: 404/405 on the HTTP side, tool list asserted on the MCP side).
+
+**Proposals.** Strict validation with field-level errors (`path`, `code`, `message`); nothing is stored unless everything is valid. New people and links are stored as `pending` rows; edits are stored only as `change` rows (`{field: {from, to}}` + `base_updated_at`); verified rows are never touched until approval. Decisions I made where the spec was silent:
+- Links from an agent may point only to verified people or to `ref`s in the same proposal; editing or linking a record that is still pending is refused (`pending_target`).
+- `from` is checked at submit time too (`stale_from`), so an agent that read old data learns at once.
+- An agent may have at most 50 open proposals; limits per proposal: 200 people, 400 links, 200 changes; body limit 1 MB.
+- Editable fields are whitelisted per target type (person, person_name, relationship). Deleting or merging people, `id`, `status`, `vault_id`, `created_by`, `proposal_id`, `merged_into`, timestamps are refused.
+- Approval is one transaction. Without explicit decisions, all non-conflicting fields of all changes are applied; a conflicting field is skipped and reported, and is applied only if the human lists it under `overwrite`. Rejection soft-deletes the proposal's pending records.
+- Warnings are computed on the resulting state, only for what the proposal touches: parent too young (<12) or too old (mother >55, father >80), parent died before the birth (father: 280 days of slack), death before birth, possible duplicate (same name), and the link-kind impact note ("removes N people from X's blood lineage and changes up to M stored relationship answers"). Cycles are refused by the store when the link is written.
+- `?pending=1` applies open proposals' changes on top of the graph (kind, subtype, end date, removals, dates, sex) and the result says `includes_pending`.
+- Undo restores the old row as a **new** revision; refused if the record changed again since. (Bug found by test and fixed: restoring column by column broke the date/qualifier CHECK; it is now one statement.)
+
+**MCP check (spec section 18), done on 2026-11-19.**
+- The current MCP spec has two eras of Streamable HTTP. 2025-03-26 to 2025-11-25: `initialize` handshake, optional `Mcp-Session-Id`, optional GET stream. The newest revision (2026-07-28) removes sessions and the GET stream and puts client info and protocol version into every request.
+- We implement the 2025 era (JSON responses, session id minted on `initialize`, GET/DELETE answer 405). A client that sends `MCP-Protocol-Version: 2026-07-28` gets the spec's 400 "unsupported version" with our supported list so it can fall back. Adding the newest revision is a contained change once clients use it.
+- Origin is validated (403 for a non-localhost Origin) as the spec requires for DNS-rebinding protection.
+- Claude Code supports stdio, HTTP (`claude mcp add --transport http <name> <url> --header "Authorization: Bearer ..."`) and SSE (deprecated). Checked against Anthropic's Claude Code docs.
+- Claude Desktop: I could not fetch Anthropic's own page (blocked here). From what I know and third-party pages, it starts local servers from `claude_desktop_config.json` over **stdio**, and reaches remote servers through its Connectors UI. That is why the bridge exists. **Unverified in this session; please confirm on your machine.**
+- The bridge answers `initialize`, `tools/list`, `ping` and the guide locally, so clients show it as healthy, and only `tools/call` needs the running app. With the app closed a call returns "Open the Family Tree app first".
+
+**Open for later phases.** Window, wizard and password unlock in the app (the headless binary refuses a protected tree for now); settings screen is only the JSON endpoint; push instead of the 5 s poll is not needed (the UI polls `/api/status`); relationship/graph reload the graph per request (fine for family-sized trees, to be cached for 100k).
