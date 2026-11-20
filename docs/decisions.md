@@ -66,7 +66,7 @@ Phase 1 needs crates.io. Network for package installs was blocked in the Phase 0
 **Agent powers** are defined once in `ops.rs`; HTTP and MCP both call it: guide, search, person, relationship, graph, create proposal, list own proposals. No route or tool exists for edit, delete, approve, reject or undo (tested: 404/405 on the HTTP side, tool list asserted on the MCP side).
 
 **Proposals.** Strict validation with field-level errors (`path`, `code`, `message`); nothing is stored unless everything is valid. New people and links are stored as `pending` rows; edits are stored only as `change` rows (`{field: {from, to}}` + `base_updated_at`); verified rows are never touched until approval. Decisions I made where the spec was silent:
-- Links from an agent may point only to verified people or to `ref`s in the same proposal; editing or linking a record that is still pending is refused (`pending_target`).
+- Links and edits may target people/links that are still pending in another proposal (spec section 6 already said approval is then blocked; my first version was stricter than the spec and is corrected). The review shows `depends_on`; approving is blocked until that proposal is approved; rejecting it removes the dangling links, marks the dependent edits `conflicting`, and reports which proposals were affected.
 - `from` is checked at submit time too (`stale_from`), so an agent that read old data learns at once.
 - An agent may have at most 50 open proposals; limits per proposal: 200 people, 400 links, 200 changes; body limit 1 MB.
 - Editable fields are whitelisted per target type (person, person_name, relationship). Deleting or merging people, `id`, `status`, `vault_id`, `created_by`, `proposal_id`, `merged_into`, timestamps are refused.

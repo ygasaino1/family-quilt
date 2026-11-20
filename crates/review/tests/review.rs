@@ -211,17 +211,64 @@ fn disallowed_things_are_rejected_with_field_errors() {
 }
 
 #[test]
-fn agents_cannot_touch_pending_records_or_remove_with_stale_base() {
+fn removal_with_stale_base_is_refused() {
     let mut f = fam();
-    let r = submit(&mut f.s, "a", &json!({"summary": "x", "people": [{"ref": "n", "full_name": "Pending Pat"}]})).unwrap();
-    let pid = r.people[0].id.clone();
-    let e = errors(submit(&mut f.s, "b", &change_person(&pid, "note", Value::Null, json!("hi"))));
-    assert_eq!(e, vec![("$.changes[0].target_id".to_string(), "pending_target")]);
-    let e = errors(submit(&mut f.s, "b", &json!({"summary": "x", "relationships": [{"type": "partnership", "a": pid, "b": f.kid}]})));
-    assert_eq!(e, vec![("$.relationships[0].a".to_string(), "pending_target")]);
-    // A removal against an old base_updated_at is stale.
     let e = errors(submit(&mut f.s, "b", &json!({"summary": "x", "changes": [{"target_type": "relationship", "target_id": f.link_dk, "op": "remove", "base_updated_at": "2000-01-01T00:00:00Z"}]})));
     assert_eq!(e[0].1, "stale");
+}
+
+#[test]
+fn links_and_edits_may_target_pending_people_but_approval_waits_for_their_proposal() {
+    let mut f = fam();
+    // Proposal A adds Pat (pending).
+    let a = submit(&mut f.s, "a", &json!({"summary": "add Pat", "people": [{"ref": "n", "full_name": "Pending Pat"}]})).unwrap();
+    let pat = a.people[0].id.clone();
+    // Proposal B (another agent) links Kim -> Pat and edits Pat's note.
+    let b = submit(
+        &mut f.s,
+        "b",
+        &json!({"summary": "Pat is Kim's child", "relationships": [{"type": "parent_child", "a": f.kid, "b": pat}],
+                "changes": [{"target_type": "person", "target_id": pat, "op": "update", "fields": {"note": {"from": null, "to": "hello"}}}]}),
+    )
+    .unwrap();
+    let v = review(&f.s, &b.proposal_id).unwrap();
+    assert_eq!(v.depends_on.len(), 1);
+    assert_eq!(v.depends_on[0].proposal_id, a.proposal_id);
+    assert!(review(&f.s, &a.proposal_id).unwrap().depends_on.is_empty());
+    // Approve is blocked until A is approved.
+    let err = approve(&mut f.s, &b.proposal_id, &ApproveRequest::default(), "human").unwrap_err();
+    assert!(err.to_string().contains("approve the proposal it depends on first"), "{err}");
+    assert_eq!(f.s.get_proposal(&CTX, &b.proposal_id).unwrap().status, "pending");
+    approve(&mut f.s, &a.proposal_id, &ApproveRequest::default(), "human").unwrap();
+    let rep = approve(&mut f.s, &b.proposal_id, &ApproveRequest::default(), "human").unwrap();
+    assert_eq!((rep.relationships_verified, rep.changes_applied), (1, 1));
+    assert_eq!(f.s.get_person(&CTX, &pat).unwrap().note.as_deref(), Some("hello"));
+    assert!(query::relationship(&f.s, &f.kid, &pat, false, false).unwrap().a_is.is_some());
+}
+
+#[test]
+fn rejecting_the_proposal_a_link_depends_on_removes_the_dangling_link_and_reports_it() {
+    let mut f = fam();
+    let a = submit(&mut f.s, "a", &json!({"summary": "add Pat", "people": [{"ref": "n", "full_name": "Pending Pat"}]})).unwrap();
+    let pat = a.people[0].id.clone();
+    let b = submit(
+        &mut f.s,
+        "b",
+        &json!({"summary": "link + edit", "people": [{"ref": "z", "full_name": "Zed Z"}],
+        "relationships": [{"type": "parent_child", "a": f.kid, "b": pat}, {"type": "parent_child", "a": f.kid, "b": "z"}],
+        "changes": [{"target_type": "person", "target_id": pat, "op": "update", "fields": {"note": {"from": null, "to": "x"}}}]}),
+    )
+    .unwrap();
+    let rep = reject(&mut f.s, &a.proposal_id, "human").unwrap();
+    assert_eq!(rep.affected_proposals, vec![b.proposal_id.clone()]);
+    // B is now free of the dependency; its own new person and link survive, the dangling link and edit do not.
+    let v = review(&f.s, &b.proposal_id).unwrap();
+    assert!(v.depends_on.is_empty());
+    assert_eq!(v.new_relationships.len(), 1);
+    assert_eq!(v.changes[0].change.status, "conflicting");
+    let rep = approve(&mut f.s, &b.proposal_id, &ApproveRequest::default(), "human").unwrap();
+    assert_eq!((rep.people_verified, rep.relationships_verified, rep.changes_applied), (1, 1, 0));
+    assert!(query::search(&f.s, "Pending Pat", 5, true).unwrap().is_empty());
 }
 
 #[test]

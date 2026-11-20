@@ -2,7 +2,7 @@
 //! transaction**; a stale change is never applied silently (section 19).
 
 use crate::fields::{apply_name, apply_person, apply_relationship, norm};
-use crate::review::{change_view, proposal_warnings, Warning};
+use crate::review::{change_view, dependencies, proposal_warnings, Warning};
 use crate::{FieldError, Result, ReviewError};
 use family_store::{AccessContext, Store, StoreError};
 use serde::{Deserialize, Serialize};
@@ -50,6 +50,12 @@ pub fn approve(store: &mut Store, proposal_id: &str, req: &ApproveRequest, by: &
     let proposal = store.get_proposal(&CTX, proposal_id)?;
     if proposal.status != "pending" {
         return Err(StoreError::Conflict(format!("this proposal was already {}", proposal.status)).into());
+    }
+    // Blocked while it links to, or edits, people another proposal has not added yet.
+    let waiting: Vec<_> = dependencies(store, proposal_id)?;
+    if !waiting.is_empty() {
+        let list: Vec<String> = waiting.iter().map(|d| format!("\"{}\" ({})", d.summary.clone().unwrap_or_default(), d.created_by)).collect();
+        return Err(StoreError::Conflict(format!("approve the proposal it depends on first: {}", list.join(", "))).into());
     }
     let warnings = proposal_warnings(store, proposal_id)?;
     let changes = store.changes_of(&CTX, proposal_id)?;
@@ -136,14 +142,36 @@ pub fn approve(store: &mut Store, proposal_id: &str, req: &ApproveRequest, by: &
 }
 
 /// Reject: nothing changes; the proposal's pending records are removed.
-pub fn reject(store: &mut Store, proposal_id: &str, by: &str) -> Result<()> {
+pub fn reject(store: &mut Store, proposal_id: &str, by: &str) -> Result<RejectReport> {
     let proposal = store.get_proposal(&CTX, proposal_id)?;
     if proposal.status != "pending" {
         return Err(StoreError::Conflict(format!("this proposal was already {}", proposal.status)).into());
     }
     let changes = store.changes_of(&CTX, proposal_id)?;
+    let recs = store.proposal_records(&CTX, proposal_id)?;
+    // Other proposals' links to the people being removed would dangle: remove those links too and say so.
+    let mut orphan_links: Vec<(String, Option<String>)> = vec![];
+    let mut orphan_changes: Vec<(String, String)> = vec![];
+    for pid in &recs.people {
+        for r in store.relationships_of(&CTX, pid)? {
+            if r.proposal_id.as_deref() != Some(proposal_id) {
+                orphan_links.push((r.id.clone(), r.proposal_id.clone()));
+            }
+        }
+        for c in store.open_changes_for(&CTX, "person", pid)? {
+            if c.proposal_id != proposal_id {
+                orphan_changes.push((c.id, c.proposal_id));
+            }
+        }
+    }
     let marker = store.revision_marker();
     store.atomic(|s| {
+        for (id, _) in &orphan_links {
+            s.remove_relationship(&CTX, id, by)?;
+        }
+        for (id, _) in &orphan_changes {
+            s.set_change_status(&CTX, id, "conflicting")?;
+        }
         s.discard_proposal_records(&CTX, proposal_id, by)?;
         for c in &changes {
             s.set_change_status(&CTX, &c.id, "rejected")?;
@@ -152,5 +180,14 @@ pub fn reject(store: &mut Store, proposal_id: &str, by: &str) -> Result<()> {
         s.tag_revisions_since(&marker, proposal_id)?;
         Ok(())
     })?;
-    Ok(())
+    let mut affected: Vec<String> = orphan_links.into_iter().filter_map(|(_, p)| p).chain(orphan_changes.into_iter().map(|(_, p)| p)).collect();
+    affected.sort();
+    affected.dedup();
+    Ok(RejectReport { affected_proposals: affected })
+}
+
+/// Proposals that lost a link or an edit because the one they depended on was rejected.
+#[derive(Debug, Serialize)]
+pub struct RejectReport {
+    pub affected_proposals: Vec<String>,
 }

@@ -69,8 +69,8 @@ async fn approve(State(st): State<Shared>, Path(id): Path<String>, body: Option<
 }
 
 async fn reject(State(st): State<Shared>, Path(id): Path<String>) -> Result<Json<Value>, ApiError> {
-    apply::reject(&mut lock(&st), &id, HUMAN)?;
-    Ok(Json(json!({"ok": true})))
+    let r = apply::reject(&mut lock(&st), &id, HUMAN)?;
+    Ok(Json(json!({"ok": true, "affected_proposals": r.affected_proposals})))
 }
 
 #[derive(Deserialize)]

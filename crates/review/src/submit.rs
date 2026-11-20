@@ -161,10 +161,11 @@ fn parse_name(o: &Map<String, Value>, path: &str, errs: &mut Errs) -> Option<New
     Some(NewName { name_type, given, family, full_name: full, script })
 }
 
+/// An endpoint must exist. Pending people (from this agent's or another proposal) are allowed:
+/// the review screen shows the dependency and approval is blocked until that proposal is approved.
 fn existing_person(store: &Store, id: &str, path: &str, errs: &mut Errs) {
     match store.get_person(&CTX, id) {
-        Ok(p) if p.status == Status::Verified => {}
-        Ok(_) => errs.add(path, "pending_target", "this person is still waiting for review (it belongs to an open proposal); use a `ref` in the same proposal or wait for approval"),
+        Ok(_) => {}
         Err(StoreError::NotFound { .. }) => errs.add(path, "unknown_id", format!("no person with id '{id}'; search first, or use a `ref` of a person in this proposal")),
         Err(e) => errs.add(path, "lookup_failed", e.to_string()),
     }
@@ -477,10 +478,7 @@ pub fn submit(store: &mut Store, agent: &str, body: &Value) -> Result<SubmitResu
                 }
             },
         };
-        if status == Status::Pending {
-            errs.add(format!("{path}.target_id"), "pending_target", "this record is still waiting for review; submit a new proposal after it is approved");
-            continue;
-        }
+        let _ = status; // pending targets are allowed: the proposal then depends on the one that adds them
         if let Some(b) = opt_str(o, "base_updated_at", &path, 40, &mut errs) {
             if b != updated_at {
                 errs.add(format!("{path}.base_updated_at"), "stale", format!("the record changed after you read it (updated_at is now {updated_at}); read it again"));

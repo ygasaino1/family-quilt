@@ -52,6 +52,8 @@ pub struct LinkView {
 #[derive(Debug, Clone, Serialize)]
 pub struct ReviewView {
     pub proposal: ProposalRow,
+    /// Other proposals that must be approved first (this one links to, or edits, their pending records).
+    pub depends_on: Vec<Dependency>,
     pub new_people: Vec<Person>,
     pub new_relationships: Vec<LinkView>,
     pub changes: Vec<ChangeView>,
@@ -124,7 +126,8 @@ pub fn review(store: &Store, proposal_id: &str) -> Result<ReviewView> {
     }
     let changes = store.changes_of(&CTX, proposal_id)?.into_iter().map(|c| change_view(store, c)).collect();
     let warnings = proposal_warnings(store, proposal_id)?;
-    Ok(ReviewView { proposal, new_people, new_relationships, changes, warnings })
+    let depends_on = dependencies(store, proposal_id)?;
+    Ok(ReviewView { proposal, depends_on, new_people, new_relationships, changes, warnings })
 }
 
 // ───────────────────────────── warnings ─────────────────────────────
@@ -339,6 +342,63 @@ pub fn proposal_warnings(store: &Store, proposal_id: &str) -> Result<Vec<Warning
                 people: std::iter::once(child.clone()).chain(lost).chain(gained).collect(),
                 params: json!({"link": link_id, "kind": new_kind.as_str(), "affected_pairs": answers}),
             });
+        }
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Dependency {
+    pub proposal_id: String,
+    pub summary: Option<String>,
+    pub status: String,
+    pub created_by: String,
+}
+
+/// Proposals whose still-pending records this proposal links to or edits.
+pub fn dependencies(store: &Store, proposal_id: &str) -> Result<Vec<Dependency>> {
+    let mut ids: BTreeSet<String> = BTreeSet::new();
+    let mut note = |owner: Option<String>, status: family_store::Status| {
+        if let (Some(o), family_store::Status::Pending) = (owner, status) {
+            if o != proposal_id {
+                ids.insert(o);
+            }
+        }
+    };
+    let recs = store.proposal_records(&CTX, proposal_id)?;
+    for rid in &recs.relationships {
+        let r = store.get_relationship(&CTX, rid)?;
+        for pid in [&r.person_a, &r.person_b] {
+            if let Ok(p) = store.get_person(&CTX, pid) {
+                note(p.proposal_id.clone(), p.status);
+            }
+        }
+    }
+    for c in store.changes_of(&CTX, proposal_id)? {
+        match c.target_type.as_str() {
+            "person" => {
+                if let Ok(p) = store.get_person(&CTX, &c.target_id) {
+                    note(p.proposal_id.clone(), p.status);
+                }
+            }
+            "person_name" => {
+                if let Ok((pid, _)) = store.find_name(&CTX, &c.target_id) {
+                    if let Ok(p) = store.get_person(&CTX, &pid) {
+                        note(p.proposal_id.clone(), p.status);
+                    }
+                }
+            }
+            _ => {
+                if let Ok(r) = store.get_relationship(&CTX, &c.target_id) {
+                    note(r.proposal_id.clone(), r.status);
+                }
+            }
+        }
+    }
+    let mut out = vec![];
+    for id in ids {
+        if let Ok(p) = store.get_proposal(&CTX, &id) {
+            out.push(Dependency { proposal_id: id, summary: p.summary, status: p.status, created_by: p.created_by });
         }
     }
     Ok(out)

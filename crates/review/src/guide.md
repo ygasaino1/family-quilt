@@ -58,7 +58,7 @@ Only by proposal. Propose the **smallest change that fixes the problem**, includ
   `remove` a relationship.
 * Every field needs `from` (the value you saw) and `to`. If the record changed since, you get a `stale_from` error: read it again.
 * **Not possible**: deleting or merging people, and editing ids, status or timestamps.
-* You cannot edit records that are themselves still waiting for review; submit a new proposal after approval.
+* You may link to, or edit, people and links that are still waiting for review (yours or another proposal's). The user has to approve that proposal first; the review screen shows the dependency.
 
 ## Errors
 
