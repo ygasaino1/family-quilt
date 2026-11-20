@@ -13,6 +13,7 @@ pub mod bridge;
 pub mod error;
 pub mod mcp;
 pub mod ops;
+pub mod quilt;
 pub mod token;
 pub mod ui;
 
@@ -47,6 +48,7 @@ pub struct AppState {
     /// MCP sessions (2025 protocol revisions): session id -> client name.
     pub sessions: Mutex<HashMap<String, String>>,
     pub activity: Mutex<VecDeque<Activity>>,
+    pub quilt: Mutex<quilt::QuiltState>,
 }
 
 pub type Shared = Arc<AppState>;
@@ -61,6 +63,7 @@ impl AppState {
             port: Default::default(),
             sessions: Default::default(),
             activity: Default::default(),
+            quilt: Default::default(),
         })
     }
 

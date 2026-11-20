@@ -24,6 +24,9 @@ fn lock(st: &Shared) -> std::sync::MutexGuard<'_, Store> {
 pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/status", get(status))
+        .route("/quilt", get(crate::quilt::get_quilt))
+        .route("/quilt/progress", get(crate::quilt::progress))
+        .route("/quilt/cancel", post(crate::quilt::cancel))
         .route("/proposals", get(proposals))
         .route("/proposals/{id}", get(proposal))
         .route("/proposals/{id}/approve", post(approve))
@@ -43,7 +46,7 @@ pub fn routes() -> Router<Shared> {
 
 async fn status(State(st): State<Shared>) -> Result<Json<Value>, ApiError> {
     let s = lock(&st);
-    Ok(Json(json!({"version": crate::VERSION, "protected": s.is_protected(), "pending_proposals": s.count_proposals(&CTX, "pending")?})))
+    Ok(Json(json!({"version": crate::VERSION, "protected": s.is_protected(), "pending_proposals": s.count_proposals(&CTX, "pending")?, "data_key": s.data_key(&CTX)?})))
 }
 
 #[derive(Deserialize)]

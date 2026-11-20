@@ -277,6 +277,8 @@ name = "family-server"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "family-families",
+ "family-layout",
  "family-relate",
  "family-review",
  "family-store",

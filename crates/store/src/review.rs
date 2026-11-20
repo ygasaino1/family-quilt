@@ -81,6 +81,16 @@ impl Store {
         Ok(rows)
     }
 
+    /// A short token that changes whenever anything a quilt shows may have changed (any revision, any proposal or decision).
+    pub fn data_key(&self, _ctx: &AccessContext) -> Result<String> {
+        let (rev, prop, pending, decided): (Option<String>, Option<String>, i64, i64) = self.conn.query_row(
+            "SELECT (SELECT max(id) FROM revision), (SELECT max(id) FROM proposal), (SELECT count(*) FROM proposal WHERE status = 'pending'), (SELECT count(*) FROM proposal WHERE decided_at IS NOT NULL)",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )?;
+        Ok(format!("{}.{}.{pending}.{decided}", rev.unwrap_or_default().chars().rev().take(12).collect::<String>(), prop.unwrap_or_default().chars().rev().take(12).collect::<String>()))
+    }
+
     pub fn count_proposals(&self, _ctx: &AccessContext, status: &str) -> Result<usize> {
         Ok(self.conn.query_row("SELECT count(*) FROM proposal WHERE status = ?1", [status], |r| r.get::<_, i64>(0))? as usize)
     }
