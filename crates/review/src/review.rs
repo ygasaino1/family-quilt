@@ -38,6 +38,8 @@ pub struct ChangeView {
     pub target_missing: bool,
     /// Record changed since the agent read it (`base_updated_at` differs).
     pub stale: bool,
+    /// Removing a person is applied only when ticked explicitly.
+    pub needs_explicit_approval: bool,
     pub fields: Vec<FieldView>,
 }
 
@@ -66,7 +68,8 @@ fn name_of(store: &Store, id: &str) -> String {
 
 /// Current-vs-proposed view of one change.
 pub fn change_view(store: &Store, c: ChangeRow) -> ChangeView {
-    let mut view = ChangeView { target_label: String::new(), target_missing: false, stale: false, fields: vec![], change: c.clone() };
+    let mut view =
+        ChangeView { target_label: String::new(), target_missing: false, stale: false, needs_explicit_approval: c.target_type == "person" && c.op == "remove", fields: vec![], change: c.clone() };
     let get: Option<(String, crate::fields::FieldReader)> = match c.target_type.as_str() {
         "person" => store
             .get_person(&CTX, &c.target_id)
@@ -168,6 +171,7 @@ pub fn proposal_warnings(store: &Store, proposal_id: &str) -> Result<Vec<Warning
     let mut person_over: HashMap<String, HashMap<String, Value>> = HashMap::new();
     let mut kind_over: HashMap<String, LinkKind> = HashMap::new();
     let mut removed: HashSet<String> = HashSet::new();
+    let mut removed_people: HashSet<String> = HashSet::new();
     let mut touched: BTreeSet<String> = recs.people.iter().cloned().collect();
     for c in &changes {
         match (c.target_type.as_str(), c.op.as_str()) {
@@ -178,6 +182,9 @@ pub fn proposal_warnings(store: &Store, proposal_id: &str) -> Result<Vec<Warning
                         person_over.entry(c.target_id.clone()).or_default().insert(f.clone(), norm(&ft["to"]));
                     }
                 }
+            }
+            ("person", "remove") => {
+                removed_people.insert(c.target_id.clone());
             }
             ("person_name", _) => {
                 if let Ok((pid, _)) = store.find_name(&CTX, &c.target_id) {
@@ -221,6 +228,9 @@ pub fn proposal_warnings(store: &Store, proposal_id: &str) -> Result<Vec<Warning
     };
     let years = |days: i32| days as f64 / 365.25;
 
+    for id in removed_people.iter() {
+        touched.remove(id);
+    }
     for id in touched.iter() {
         let Some(p) = load(id, &mut cache) else { continue };
         let ov = person_over.get(id);
@@ -233,7 +243,7 @@ pub fn proposal_warnings(store: &Store, proposal_id: &str) -> Result<Vec<Warning
     let mut seen_links = HashSet::new();
     for id in touched.iter() {
         for r in store.relationships_of(&CTX, id)? {
-            if removed.contains(&r.id) || !seen_links.insert(r.id.clone()) || r.rel_type != RelType::ParentChild {
+            if removed.contains(&r.id) || removed_people.contains(&r.person_a) || removed_people.contains(&r.person_b) || !seen_links.insert(r.id.clone()) || r.rel_type != RelType::ParentChild {
                 continue;
             }
             let kind = kind_over.get(&r.id).copied().or(r.kind);
@@ -277,6 +287,32 @@ pub fn proposal_warnings(store: &Store, proposal_id: &str) -> Result<Vec<Warning
                 }
             }
         }
+    }
+    // Impact of removing people: links that go with them, and who is left without a recorded parent.
+    for pid in &removed_people {
+        let Some(p) = load(pid, &mut cache) else { continue };
+        let links = store.relationships_of(&CTX, pid)?;
+        let mut orphaned: Vec<String> = vec![];
+        for l in links.iter().filter(|l| l.rel_type == RelType::ParentChild && &l.person_a == pid) {
+            let others = store
+                .relationships_of(&CTX, &l.person_b)?
+                .iter()
+                .filter(|x| x.rel_type == RelType::ParentChild && x.person_b == l.person_b && &x.person_a != pid && !removed_people.contains(&x.person_a))
+                .count();
+            if others == 0 {
+                orphaned.push(l.person_b.clone());
+            }
+        }
+        let names: Vec<String> = orphaned.iter().filter_map(|i| load(i, &mut cache)).map(|c| c.display_name).collect();
+        let tail = if names.is_empty() { String::new() } else { format!(", and {} would be left without a recorded parent ({})", names.len(), names.join(", ")) };
+        let mut people = vec![pid.clone()];
+        people.extend(orphaned);
+        out.push(Warning {
+            code: "person_removal_impact",
+            message: format!("Removing {} also removes {} link{}{tail}. It can be undone from History.", p.display_name, links.len(), if links.len() == 1 { "" } else { "s" }),
+            people,
+            params: json!({"links": links.len()}),
+        });
     }
     // Possible duplicates of new people.
     for id in &recs.people {

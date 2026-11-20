@@ -436,7 +436,7 @@ pub fn submit(store: &mut Store, agent: &str, body: &Value) -> Result<SubmitResu
             "update" => "update",
             "remove" => "remove",
             "delete" | "merge" => {
-                errs.add(format!("{path}.op"), "not_allowed", "deleting or merging people is a human action; only `update`, and `remove` of a relationship, can be proposed");
+                errs.add(format!("{path}.op"), "not_allowed", "use op `remove` to propose removing a person or a link; merging people is a human action");
                 continue;
             }
             _ => {
@@ -444,8 +444,8 @@ pub fn submit(store: &mut Store, agent: &str, body: &Value) -> Result<SubmitResu
                 continue;
             }
         };
-        if op == "remove" && target_type != "relationship" {
-            errs.add(format!("{path}.op"), "not_allowed", if target_type == "person" { "deleting a person is a human action" } else { "only relationships can be removed" });
+        if op == "remove" && target_type == "person_name" {
+            errs.add(format!("{path}.op"), "not_allowed", "only people and relationships can be removed; change a name with `update`");
             continue;
         }
         // Current state of the target.
@@ -478,7 +478,12 @@ pub fn submit(store: &mut Store, agent: &str, body: &Value) -> Result<SubmitResu
                 }
             },
         };
-        let _ = status; // pending targets are allowed: the proposal then depends on the one that adds them
+        // Pending targets are allowed (the proposal then depends on the one that adds them), except for removal:
+        // a pending person is withdrawn by rejecting its proposal.
+        if op == "remove" && target_type == "person" && status == Status::Pending {
+            errs.add(format!("{path}.target_id"), "pending_target", "this person is still waiting for review; the user can reject that proposal instead");
+            continue;
+        }
         if let Some(b) = opt_str(o, "base_updated_at", &path, 40, &mut errs) {
             if b != updated_at {
                 errs.add(format!("{path}.base_updated_at"), "stale", format!("the record changed after you read it (updated_at is now {updated_at}); read it again"));

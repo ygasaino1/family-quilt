@@ -196,10 +196,12 @@ fn disallowed_things_are_rejected_with_field_errors() {
         let e = errors(submit(&mut f.s, "a", &change_person(&f.kid, field, json!("x"), json!("y"))));
         assert_eq!(e, vec![(format!("$.changes[0].fields.{field}"), code)], "{field}");
     }
-    let del = json!({"summary": "x", "changes": [{"target_type": "person", "target_id": f.kid, "op": "delete"}]});
-    assert_eq!(errors(submit(&mut f.s, "a", &del)), vec![("$.changes[0].op".to_string(), "not_allowed")]);
-    let del2 = json!({"summary": "x", "changes": [{"target_type": "person", "target_id": f.kid, "op": "remove"}]});
-    assert_eq!(errors(submit(&mut f.s, "a", &del2)), vec![("$.changes[0].op".to_string(), "not_allowed")]);
+    for op in ["delete", "merge"] {
+        let bad = json!({"summary": "x", "changes": [{"target_type": "person", "target_id": f.kid, "op": op}]});
+        assert_eq!(errors(submit(&mut f.s, "a", &bad)), vec![("$.changes[0].op".to_string(), "not_allowed")], "{op}");
+    }
+    let names = json!({"summary": "x", "changes": [{"target_type": "person_name", "target_id": f.kid, "op": "remove"}]});
+    assert_eq!(errors(submit(&mut f.s, "a", &names))[0].1, "not_allowed");
     // Unknown top-level and person fields, bad enum, missing ref, unknown id.
     let bad = json!({"summary": "x", "foo": 1, "people": [{"given_name": "A", "sex": "Q", "colour": "red"}], "relationships": [{"type": "parent_child", "a": "nope", "b": f.kid}]});
     let e = errors(submit(&mut f.s, "a", &bad));
@@ -305,4 +307,37 @@ fn limits_on_open_proposals_per_agent() {
 fn agents_md_matches_the_guide() {
     let md = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../AGENTS.md")).unwrap();
     assert_eq!(md, family_review::guide::GUIDE);
+}
+
+#[test]
+fn person_removal_is_a_proposal_with_impact_note_and_needs_an_explicit_tick() {
+    let mut f = fam();
+    let body = json!({"summary": "Dan was entered twice", "changes": [{"target_type": "person", "target_id": f.dad, "op": "remove", "agent_note": "user asked to delete Dan"}]});
+    let r = submit(&mut f.s, "a", &body).unwrap();
+    // Nothing happens at submit; the impact note names the links and the orphaned child.
+    assert!(f.s.get_person(&CTX, &f.dad).is_ok());
+    let w = r.warnings.iter().find(|w| w.code == "person_removal_impact").expect("impact");
+    assert!(w.message.contains("2 links") && w.message.contains("Kim Tester"), "{}", w.message);
+    let v = review(&f.s, &r.proposal_id).unwrap();
+    assert!(v.changes[0].needs_explicit_approval);
+    // Approving without ticking it does not delete anyone.
+    let rep = approve(&mut f.s, &r.proposal_id, &ApproveRequest::default(), "human").unwrap();
+    assert_eq!((rep.people_removed, rep.removals_not_confirmed.len()), (0, 1));
+    assert!(f.s.get_person(&CTX, &f.dad).is_ok());
+    // Second proposal, ticked.
+    let r2 = submit(&mut f.s, "a", &body).unwrap();
+    let req = ApproveRequest { decisions: vec![ChangeDecision { change_id: r2.changes[0].id.clone(), accept: true, fields: None, overwrite: vec![] }] };
+    let rep = approve(&mut f.s, &r2.proposal_id, &req, "human").unwrap();
+    assert_eq!(rep.people_removed, 1);
+    assert!(f.s.get_person(&CTX, &f.dad).is_err());
+    assert!(f.s.relationships_of(&CTX, &f.kid).unwrap().is_empty());
+    // Undo brings him back (the person revision), tagged with the proposal.
+    let rev = f.s.recent_revisions(&CTX, Some(("person", &f.dad)), 1).unwrap().remove(0);
+    assert_eq!(rev.proposal_id.as_deref(), Some(r2.proposal_id.as_str()));
+    f.s.undo_revision(&CTX, &rev.id, "human").unwrap();
+    assert!(f.s.get_person(&CTX, &f.dad).is_ok());
+    // A pending person cannot be removed by proposal.
+    let a = submit(&mut f.s, "a", &json!({"summary": "x", "people": [{"ref": "n", "full_name": "Pending Pat"}]})).unwrap();
+    let e = errors(submit(&mut f.s, "b", &json!({"summary": "x", "changes": [{"target_type": "person", "target_id": a.people[0].id, "op": "remove"}]})));
+    assert_eq!(e[0].1, "pending_target");
 }

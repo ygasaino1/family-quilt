@@ -55,9 +55,10 @@ Only by proposal. Propose the **smallest change that fixes the problem**, includ
 
 * Allowed: `update` fields of a person (`sex`, `is_living`, `birth_date`, `birth_qualifier`, `birth_place`, `death_date`, `death_qualifier`, `death_place`, `note`),
   of a name (`target_type: person_name`: `name_type`, `given`, `family`, `full_name`, `script`), or of a relationship (`kind` or `subtype`, `start_date`, `end_date`, `place`, `note`);
-  `remove` a relationship.
+  `remove` a relationship or a person.
 * Every field needs `from` (the value you saw) and `to`. If the record changed since, you get a `stale_from` error: read it again.
-* **Not possible**: deleting or merging people, and editing ids, status or timestamps.
+* **Removing a person** (`target_type: person`, `op: remove`): propose it **only when the user explicitly asks** to delete someone, and say why in `agent_note`. It is never applied by default: the user must tick it in the review, and it can be undone.
+* **Not possible**: merging people, and editing ids, status or timestamps.
 * You may link to, or edit, people and links that are still waiting for review (yours or another proposal's). The user has to approve that proposal first; the review screen shows the dependency.
 
 ## Errors

@@ -43,6 +43,9 @@ pub struct ApproveReport {
     pub changes_rejected: usize,
     /// Changes (or fields) left unapplied because the record changed; the proposal is still approved for the rest.
     pub conflicts_skipped: Vec<String>,
+    pub people_removed: usize,
+    /// Proposed person removals left alone because they were not ticked explicitly.
+    pub removals_not_confirmed: Vec<String>,
     pub warnings: Vec<Warning>,
 }
 
@@ -73,8 +76,17 @@ pub fn approve(store: &mut Store, proposal_id: &str, req: &ApproveRequest, by: &
     let decisions: HashMap<&str, &ChangeDecision> = req.decisions.iter().map(|d| (d.change_id.as_str(), d)).collect();
     let views: HashMap<String, _> = changes.iter().map(|c| (c.id.clone(), change_view(store, c.clone()))).collect();
 
-    let mut report =
-        ApproveReport { proposal_id: proposal_id.to_string(), people_verified: 0, relationships_verified: 0, changes_applied: 0, changes_rejected: 0, conflicts_skipped: vec![], warnings };
+    let mut report = ApproveReport {
+        proposal_id: proposal_id.to_string(),
+        people_verified: 0,
+        relationships_verified: 0,
+        changes_applied: 0,
+        changes_rejected: 0,
+        conflicts_skipped: vec![],
+        people_removed: 0,
+        removals_not_confirmed: vec![],
+        warnings,
+    };
     let marker = store.revision_marker();
     let rep = &mut report;
     store.atomic(|s| {
@@ -95,6 +107,25 @@ pub fn approve(store: &mut Store, proposal_id: &str, req: &ApproveRequest, by: &
                 continue;
             }
             let overwrite: &[String] = d.map(|d| d.overwrite.as_slice()).unwrap_or(&[]);
+            if c.op == "remove" && c.target_type == "person" {
+                // Deleting a person is never applied by default: the human must tick it explicitly.
+                if !d.is_some_and(|d| d.accept) {
+                    s.set_change_status(&CTX, &c.id, "rejected")?;
+                    rep.changes_rejected += 1;
+                    rep.removals_not_confirmed.push(v.target_label.clone());
+                    continue;
+                }
+                if v.stale && !overwrite.iter().any(|f| f == "remove") {
+                    s.set_change_status(&CTX, &c.id, "conflicting")?;
+                    rep.conflicts_skipped.push(format!("{}: the person changed after the agent read them", c.id));
+                    continue;
+                }
+                s.soft_delete_person(&CTX, &c.target_id, by)?;
+                s.set_change_status(&CTX, &c.id, "applied")?;
+                rep.changes_applied += 1;
+                rep.people_removed += 1;
+                continue;
+            }
             if c.op == "remove" {
                 if v.stale && !overwrite.iter().any(|f| f == "remove") {
                     s.set_change_status(&CTX, &c.id, "conflicting")?;
