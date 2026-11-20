@@ -25,6 +25,7 @@ pub mod simplex;
 use family_families::Derived;
 use family_store::Graph;
 pub use score::{quilt_score, Score};
+use serde::Serialize;
 
 /// One column: its parents (one or more) and its children (one cell each).
 #[derive(Debug, Clone, Default)]
@@ -127,6 +128,62 @@ pub enum Align {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Options {
     pub mode: Mode,
+}
+
+/// How much work to put in. `Quick` is for showing something at once (longest-path ranking, one ordering
+/// variant, no swap refinement); `Full` is the careful layout the quality gate is measured on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Effort {
+    Quick,
+    #[default]
+    Full,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Stage {
+    Ranking,
+    Ordering,
+    Polishing,
+    Done,
+}
+
+/// Rows and columns at one point of the work (person / family indexes, in order).
+#[derive(Debug, Clone)]
+pub struct Snapshot {
+    pub rows: Vec<u32>,
+    pub cols: Vec<u32>,
+}
+
+/// What the engine reports while it works. `score` is the quilt score of the best order so far.
+/// `snapshot` is present only at the natural points where the picture really changes (after ordering,
+/// and at the end) and only if [`Sink::wants_snapshots`] says so.
+#[derive(Debug, Clone)]
+pub struct Progress {
+    pub stage: Stage,
+    pub fraction: f32,
+    pub score: Option<Score>,
+    pub snapshot: Option<Snapshot>,
+}
+
+/// Receives progress; returning `false` stops the work (the engine then returns `None`).
+pub trait Sink {
+    fn report(&mut self, p: Progress) -> bool;
+    fn wants_snapshots(&self) -> bool {
+        false
+    }
+}
+
+impl<F: FnMut(Progress) -> bool> Sink for F {
+    fn report(&mut self, p: Progress) -> bool {
+        self(p)
+    }
+}
+
+/// The full-featured entry point: effort, previous order, and progress with cancellation.
+/// Returns `None` if the sink asked to stop. With [`Effort::Full`] and no hint the result equals [`layout_with_options`].
+pub fn layout_with_progress(people: usize, tiebreak: &[i64], families: &[FamilyIn], options: &Options, hint: Option<&Hint>, effort: Effort, sink: &mut dyn Sink) -> Option<Layout> {
+    order::layout_run(people, tiebreak, families, options, hint, effort, sink)
 }
 
 /// `tiebreak[p]`: smaller sorts first (birth day, or `i64::MAX`). Equal keys fall back to the index.

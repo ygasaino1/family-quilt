@@ -1,21 +1,24 @@
 //! Ordering inside each connected tree: depth-first start, then barycentre sweeps over the layers
 //! person / family / person / ... The best sweep by the quilt score is kept.
 
-use crate::rank::{find, rank, union};
+use crate::rank::{find, rank_with, union};
 use crate::score::{quilt_score, Score};
-use crate::{cells_of, invert, FamilyIn, Layout};
+use crate::{cells_of, invert, Effort, FamilyIn, Layout, Progress, Sink, Snapshot, Stage};
 
 /// Work budget (sum over evaluations of the cell count) for the neighbour-swap refinement on the real
 /// score. Deterministic (no clock). A tree gets refined only if one full pass fits in the budget.
 pub const REFINE_BUDGET: u64 = 200_000_000;
 
-struct CompResult {
-    rows: Vec<u32>,
-    cols: Vec<u32>,
+pub(crate) fn layout(people: usize, tiebreak: &[i64], families: &[FamilyIn], options: &crate::Options, hint: Option<&crate::Hint>) -> Layout {
+    layout_run(people, tiebreak, families, options, hint, Effort::Full, &mut |_: Progress| true).expect("a sink that never stops cannot cancel")
 }
 
-pub(crate) fn layout(people: usize, tiebreak: &[i64], families: &[FamilyIn], options: &crate::Options, hint: Option<&crate::Hint>) -> Layout {
-    let ranks = rank(people, families);
+pub(crate) fn layout_run(people: usize, tiebreak: &[i64], families: &[FamilyIn], options: &crate::Options, hint: Option<&crate::Hint>, effort: Effort, sink: &mut dyn Sink) -> Option<Layout> {
+    let quick = effort == Effort::Quick;
+    let ranks = rank_with(people, families, !quick);
+    if !sink.report(Progress { stage: Stage::Ranking, fraction: 1.0, score: None, snapshot: None }) {
+        return None;
+    }
     let nf = families.len();
 
     // Connected trees: everyone in a family is joined.
@@ -58,8 +61,10 @@ pub(crate) fn layout(people: usize, tiebreak: &[i64], families: &[FamilyIn], opt
     let mut local_p = vec![0u32; people];
     let mut local_f = vec![0u32; nf];
     let n_linked = linked.len();
-    let mut tree_rows: Vec<Vec<u32>> = Vec::new();
-    let mut tree_cols: Vec<Vec<u32>> = Vec::new();
+    let total_nodes = (people + nf).max(1) as f32;
+    let mut done_nodes = 0usize;
+    let mut partials: Vec<Option<Partial>> = Vec::new();
+    let mut singles_rows: Vec<Vec<u32>> = Vec::new();
     for (tree, &r) in linked.iter().chain(singles.iter()).enumerate() {
         let persons = &comp_persons[r as usize];
         let fams = &comp_fams[r as usize];
@@ -73,25 +78,86 @@ pub(crate) fn layout(people: usize, tiebreak: &[i64], families: &[FamilyIn], opt
             out.family_tree[f as usize] = tree as u32;
         }
         if fams.is_empty() {
-            tree_rows.push(persons.clone());
-            tree_cols.push(Vec::new());
+            partials.push(None);
+            singles_rows.push(persons.clone());
             continue;
         }
+        singles_rows.push(Vec::new());
         for (i, &p) in persons.iter().enumerate() {
             local_p[p as usize] = i as u32;
         }
         for (i, &f) in fams.iter().enumerate() {
             local_f[f as usize] = i as u32;
         }
-        let ctx = Ctx { tiebreak, families, as_parent: &as_parent, as_child: &as_child, person_gen: &out.person_gen, family_gen: &out.family_gen, local_p: &local_p, local_f: &local_f, hint };
-        let res = order_component(&ctx, persons, fams);
-        tree_rows.push(res.rows);
-        tree_cols.push(res.cols);
+        let ctx = Ctx { tiebreak, families, as_parent: &as_parent, as_child: &as_child, person_gen: &out.person_gen, family_gen: &out.family_gen, local_p: &local_p, local_f: &local_f, hint, quick };
+        partials.push(Some(start_component(&ctx, persons, fams)));
+        done_nodes += persons.len() + fams.len();
+        let score = partials.iter().flatten().fold(crate::Score::default(), |a, p| a + p.score);
+        if !sink.report(Progress { stage: Stage::Ordering, fraction: done_nodes as f32 / total_nodes, score: Some(score), snapshot: None }) {
+            return None;
+        }
     }
+    let rows_cols = |partials: &[Option<Partial>]| -> (Vec<Vec<u32>>, Vec<Vec<u32>>) {
+        let mut tr = Vec::new();
+        let mut tc = Vec::new();
+        for (t, p) in partials.iter().enumerate() {
+            match p {
+                Some(p) => {
+                    let (r, c) = p.rows_cols();
+                    tr.push(r);
+                    tc.push(c);
+                }
+                None => {
+                    tr.push(singles_rows[t].clone());
+                    tc.push(Vec::new());
+                }
+            }
+        }
+        (tr, tc)
+    };
+    if !quick {
+        // Everything is ordered; now polish tree by tree on the real score.
+        let after_ordering = partials.iter().flatten().fold(crate::Score::default(), |a, p| a + p.score);
+        let snap = sink.wants_snapshots().then(|| {
+            let (tr, tc) = rows_cols(&partials);
+            let mut tmp = out.clone();
+            assemble(&mut tmp, options, tiebreak, n_linked, &tr, &tc);
+            Snapshot { rows: tmp.rows, cols: tmp.cols }
+        });
+        if !sink.report(Progress { stage: Stage::Polishing, fraction: 0.0, score: Some(after_ordering), snapshot: snap }) {
+            return None;
+        }
+        let mut polished = 0usize;
+        let polish_total: usize = partials.iter().flatten().map(|p| p.np + p.nfm).sum::<usize>().max(1);
+        for i in 0..partials.len() {
+            let others = partials.iter().enumerate().filter(|(j, _)| *j != i).filter_map(|(_, p)| p.as_ref()).fold(crate::Score::default(), |a, p| a + p.score);
+            let Some(part) = partials[i].as_mut() else { continue };
+            let size = part.np + part.nfm;
+            let base = polished as f32 / polish_total as f32;
+            let mut keep = true;
+            part.refine(&mut |s| {
+                keep = sink.report(Progress { stage: Stage::Polishing, fraction: base, score: Some(others + s), snapshot: None });
+                keep
+            });
+            if !keep {
+                return None;
+            }
+            polished += size;
+            let score = partials.iter().flatten().fold(crate::Score::default(), |a, p| a + p.score);
+            if !sink.report(Progress { stage: Stage::Polishing, fraction: polished as f32 / polish_total as f32, score: Some(score), snapshot: None }) {
+                return None;
+            }
+        }
+    }
+    let (tree_rows, tree_cols) = rows_cols(&partials);
     assemble(&mut out, options, tiebreak, n_linked, &tree_rows, &tree_cols);
     let cells = cells_of(families);
     out.score = quilt_score(&invert(&out.rows), &invert(&out.cols), &cells);
-    out
+    let snap = sink.wants_snapshots().then(|| Snapshot { rows: out.rows.clone(), cols: out.cols.clone() });
+    if !sink.report(Progress { stage: Stage::Done, fraction: 1.0, score: Some(out.score), snapshot: snap }) {
+        return None;
+    }
+    Some(out)
 }
 
 /// Put the trees' blocks into the final row and column order (see [`crate::Mode`]).
@@ -160,9 +226,10 @@ struct Ctx<'a> {
     local_p: &'a [u32],
     local_f: &'a [u32],
     hint: Option<&'a crate::Hint>,
+    quick: bool,
 }
 
-fn order_component(c: &Ctx, persons: &[u32], fams: &[u32]) -> CompResult {
+fn start_component(c: &Ctx, persons: &[u32], fams: &[u32]) -> Partial {
     let (np, nfm) = (persons.len(), fams.len());
     let n = np + nfm;
     let loc_p = |g: u32| c.local_p[g as usize];
@@ -199,24 +266,8 @@ fn order_component(c: &Ctx, persons: &[u32], fams: &[u32]) -> CompResult {
         }
         v
     };
-    let eval = |layers: &[Vec<u32>]| -> Score {
-        let mut rp = vec![0u32; np];
-        let mut cp = vec![0u32; nfm];
-        let (mut r, mut k) = (0u32, 0u32);
-        for l in layers {
-            for &v in l {
-                if (v as usize) < np {
-                    rp[v as usize] = r;
-                    r += 1;
-                } else {
-                    cp[v as usize - np] = k;
-                    k += 1;
-                }
-            }
-        }
-        quilt_score(&rp, &cp, &cells)
-    };
-    let variants: &[(bool, bool)] = if n > 60_000 {
+    let eval = |layers: &[Vec<u32>]| -> Score { eval_layers(layers, np, nfm, &cells) };
+    let variants: &[(bool, bool)] = if c.quick || n > 60_000 {
         &[(false, false)]
     } else if n > 8_000 {
         &[(false, false), (true, false)]
@@ -242,46 +293,87 @@ fn order_component(c: &Ctx, persons: &[u32], fams: &[u32]) -> CompResult {
             }
         }
     }
-    let (mut best_score, mut best_layers) = best.unwrap();
-    // Local refinement on the real objective: swap neighbours inside a layer while the quilt score improves.
-    let evals_allowed = REFINE_BUDGET / (cells.len() as u64 + 1);
-    if evals_allowed >= n as u64 {
+    let (score, layers) = best.unwrap();
+    Partial { persons: persons.to_vec(), fams: fams.to_vec(), np, nfm, cells, layers, score }
+}
+
+/// One tree after ordering, before the swap refinement.
+struct Partial {
+    persons: Vec<u32>,
+    fams: Vec<u32>,
+    np: usize,
+    nfm: usize,
+    cells: Vec<(u32, u32)>,
+    layers: Vec<Vec<u32>>,
+    score: Score,
+}
+
+fn eval_layers(layers: &[Vec<u32>], np: usize, nfm: usize, cells: &[(u32, u32)]) -> Score {
+    let mut rp = vec![0u32; np];
+    let mut cp = vec![0u32; nfm];
+    let (mut r, mut k) = (0u32, 0u32);
+    for l in layers {
+        for &v in l {
+            if (v as usize) < np {
+                rp[v as usize] = r;
+                r += 1;
+            } else {
+                cp[v as usize - np] = k;
+                k += 1;
+            }
+        }
+    }
+    quilt_score(&rp, &cp, cells)
+}
+
+impl Partial {
+    fn rows_cols(&self) -> (Vec<u32>, Vec<u32>) {
+        let mut rows = Vec::with_capacity(self.np);
+        let mut cols = Vec::with_capacity(self.nfm);
+        for l in &self.layers {
+            for &v in l {
+                if (v as usize) < self.np {
+                    rows.push(self.persons[v as usize]);
+                } else {
+                    cols.push(self.fams[v as usize - self.np]);
+                }
+            }
+        }
+        (rows, cols)
+    }
+
+    /// Local refinement on the real objective: swap neighbours inside a layer while the quilt score improves.
+    /// `tick` gets the best score after each pass; returning `false` stops the passes (the caller handles the cancel).
+    fn refine(&mut self, tick: &mut dyn FnMut(Score) -> bool) {
+        let (np, nfm, n) = (self.np, self.nfm, self.np + self.nfm);
+        let evals_allowed = REFINE_BUDGET / (self.cells.len() as u64 + 1);
+        if evals_allowed < n as u64 {
+            return;
+        }
         let mut evals = 0u64;
         'passes: for _ in 0..12 {
             let mut improved = false;
-            for li in 0..best_layers.len() {
-                for i in 0..best_layers[li].len().saturating_sub(1) {
+            for li in 0..self.layers.len() {
+                for i in 0..self.layers[li].len().saturating_sub(1) {
                     if evals >= evals_allowed {
                         break 'passes;
                     }
                     evals += 1;
-                    best_layers[li].swap(i, i + 1);
-                    let s = eval(&best_layers);
-                    if s.key() < best_score.key() {
-                        best_score = s;
+                    self.layers[li].swap(i, i + 1);
+                    let s = eval_layers(&self.layers, np, nfm, &self.cells);
+                    if s.key() < self.score.key() {
+                        self.score = s;
                         improved = true;
                     } else {
-                        best_layers[li].swap(i, i + 1);
+                        self.layers[li].swap(i, i + 1);
                     }
                 }
             }
-            if !improved {
+            if !tick(self.score) || !improved {
                 break;
             }
         }
     }
-    let mut rows = Vec::with_capacity(np);
-    let mut cols = Vec::with_capacity(nfm);
-    for l in &best_layers {
-        for &v in l {
-            if (v as usize) < np {
-                rows.push(persons[v as usize]);
-            } else {
-                cols.push(fams[v as usize - np]);
-            }
-        }
-    }
-    CompResult { rows, cols }
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -247,6 +247,7 @@ dependencies = [
  "family-families",
  "family-gedcom",
  "family-store",
+ "serde",
 ]
 
 [[package]]

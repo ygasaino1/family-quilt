@@ -22,6 +22,14 @@ fn main() {
     let t = Instant::now();
     let d = derive_families(&g);
     println!("{} people, {} columns; derive_families {:?}", g.people.len(), d.families.len(), t.elapsed());
+    let tb: Vec<i64> = g.people.iter().map(|p| p.birth.map(|b| b.earliest_day() as i64).unwrap_or(i64::MAX)).collect();
+    let t = Instant::now();
+    let q =
+        family_layout::layout_with_progress(g.people.len(), &tb, &family_layout::input_from_derived(&d), &Default::default(), None, family_layout::Effort::Quick, &mut |_: family_layout::Progress| {
+            true
+        })
+        .unwrap();
+    println!("quick layout {:?} (crossings {})", t.elapsed(), q.score.crossings);
     let t = Instant::now();
     let l = family_layout::layout_graph(&g, &d);
     let el = t.elapsed();

@@ -322,3 +322,71 @@ fn check_perm(l: &Layout, people: usize, fams: &[FamilyIn]) {
     assert_eq!(c, (0..fams.len() as u32).collect::<Vec<_>>());
     assert_eq!(l.score, quilt_score(&l.row_pos(), &l.col_pos(), &cells_of(fams)));
 }
+
+struct Rec {
+    events: Vec<(Stage, f32, Option<Score>, bool)>,
+    snaps: bool,
+    stop_after: Option<usize>,
+}
+
+impl Sink for Rec {
+    fn report(&mut self, p: Progress) -> bool {
+        self.events.push((p.stage, p.fraction, p.score, p.snapshot.is_some()));
+        self.stop_after.is_none_or(|n| self.events.len() < n)
+    }
+    fn wants_snapshots(&self) -> bool {
+        self.snaps
+    }
+}
+
+#[test]
+fn quick_and_full_effort_with_progress() {
+    let (n, tb, fams) = generated(150, 7);
+    let opt = Options::default();
+    let plain = layout_with_options(n, &tb, &fams, &opt, None);
+
+    // Full effort with a sink gives exactly the plain result.
+    let mut rec = Rec { events: vec![], snaps: true, stop_after: None };
+    let full = layout_with_progress(n, &tb, &fams, &opt, None, Effort::Full, &mut rec).unwrap();
+    assert_eq!((&full.rows, &full.cols), (&plain.rows, &plain.cols));
+    // Stages come in order, fractions never go back within a stage, the last event is Done with the final score.
+    let order = |s: Stage| match s {
+        Stage::Ranking => 0,
+        Stage::Ordering => 1,
+        Stage::Polishing => 2,
+        Stage::Done => 3,
+    };
+    assert!(rec.events.windows(2).all(|w| order(w[0].0) <= order(w[1].0)));
+    for st in [Stage::Ordering, Stage::Polishing] {
+        let f: Vec<f32> = rec.events.iter().filter(|e| e.0 == st).map(|e| e.1).collect();
+        assert!(f.windows(2).all(|w| w[0] <= w[1] + 1e-6), "{st:?} {f:?}");
+    }
+    let last = rec.events.last().unwrap();
+    assert_eq!((last.0, last.2), (Stage::Done, Some(full.score)));
+    // Snapshots appear only at the natural points: start of polishing and the end.
+    let snaps: Vec<Stage> = rec.events.iter().filter(|e| e.3).map(|e| e.0).collect();
+    assert_eq!(snaps, vec![Stage::Polishing, Stage::Done]);
+    // Without snapshots requested, none are built.
+    let mut quiet = Rec { events: vec![], snaps: false, stop_after: None };
+    layout_with_progress(n, &tb, &fams, &opt, None, Effort::Full, &mut quiet).unwrap();
+    assert!(quiet.events.iter().all(|e| !e.3));
+    // The score reported while polishing never gets worse.
+    let scores: Vec<(u64, u64, u64)> = rec.events.iter().filter(|e| e.0 == Stage::Polishing).filter_map(|e| e.2.map(|s| s.key())).collect();
+    assert!(scores.windows(2).all(|w| w[1] <= w[0]), "{scores:?}");
+
+    // Quick is a valid layout (same invariants), no polishing stage, and not better than Full.
+    let mut rq = Rec { events: vec![], snaps: false, stop_after: None };
+    let quick = layout_with_progress(n, &tb, &fams, &opt, None, Effort::Quick, &mut rq).unwrap();
+    check(&quick, n, &fams);
+    assert!(rq.events.iter().all(|e| e.0 != Stage::Polishing));
+    assert!(full.score.key() <= quick.score.key(), "full {:?} quick {:?}", full.score, quick.score);
+    // Deterministic.
+    let quick2 = layout_with_progress(n, &tb, &fams, &opt, None, Effort::Quick, &mut |_: Progress| true).unwrap();
+    assert_eq!((&quick.rows, &quick.cols), (&quick2.rows, &quick2.cols));
+
+    // Cancel at any point returns None.
+    for stop in [1, 2, rec.events.len() / 2, rec.events.len() - 1] {
+        let mut c = Rec { events: vec![], snaps: false, stop_after: Some(stop) };
+        assert!(layout_with_progress(n, &tb, &fams, &opt, None, Effort::Full, &mut c).is_none(), "stop at {stop}");
+    }
+}
