@@ -38,6 +38,11 @@ pub struct Ranks {
 }
 
 pub fn rank(people: usize, families: &[FamilyIn]) -> Ranks {
+    rank_with(people, families, true)
+}
+
+/// `use_simplex = false` skips the network simplex pass (longest path + compaction only): much faster on big trees, a little less compact.
+pub fn rank_with(people: usize, families: &[FamilyIn], use_simplex: bool) -> Ranks {
     let nf = families.len();
     let n = people + nf;
     // Edges: person p -> family f (parent), family f -> person c (child). CSR for succ and pred.
@@ -163,7 +168,7 @@ pub fn rank(people: usize, families: &[FamilyIn]) -> Ranks {
                     }
                 }
             }
-            if members.len() < 3 || members.len() > SIMPLEX_MAX_NODES {
+            if members.len() < 3 || members.len() > SIMPLEX_MAX_NODES || !use_simplex {
                 continue;
             }
             members.sort_unstable();
