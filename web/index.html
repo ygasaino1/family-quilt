@@ -8,70 +8,86 @@
 </head>
 <body>
 <a class="skip" href="#quilt" data-i18n="a11y.skip">Skip to the tree</a>
-<header class="bar" role="toolbar" data-i18n-aria="bar.label">
-  <h1 id="title" class="title">Family Tree</h1>
-  <nav class="views" aria-label="views">
-    <button id="nav-quilt" class="tab" aria-pressed="true" data-i18n="nav.tree">Tree</button>
-    <button id="nav-people" class="tab" aria-pressed="false" data-i18n="nav.people">People</button>
-    <button id="nav-review" class="tab" aria-pressed="false"><span data-i18n="nav.review">Review</span> <span id="review-badge" class="badge" hidden>0</span></button>
+<div class="app">
+  <nav class="rail" data-i18n-aria="nav.label">
+    <button id="nav-quilt" class="rail-btn" aria-pressed="true" data-i18n-title="nav.tree" data-i18n-aria="nav.tree"><span data-icon="tree" data-size="22"></span></button>
+    <button id="nav-people" class="rail-btn" aria-pressed="false" data-i18n-title="nav.people" data-i18n-aria="nav.people"><span data-icon="people" data-size="22"></span></button>
+    <button id="nav-review" class="rail-btn" aria-pressed="false" data-i18n-title="nav.review" data-i18n-aria="nav.review"><span data-icon="review" data-size="22"></span><span id="review-badge" class="badge" hidden>0</span></button>
+    <button id="nav-agent" class="rail-btn" data-i18n-title="nav.agent" data-i18n-aria="nav.agent"><span data-icon="key" data-size="22"></span></button>
+    <span class="grow"></span>
+    <button id="settings" class="rail-btn" data-i18n-title="settings.open" data-i18n-aria="settings.open"><span data-icon="sliders" data-size="22"></span></button>
   </nav>
-  <div class="grp tools" id="tools-quilt">
-    <input id="search" type="search" class="search" data-i18n-placeholder="search.placeholder" data-i18n-aria="search.label" autocomplete="off">
-    <button id="search-case" class="btn icon" aria-pressed="false" data-i18n-title="search.case" data-i18n-aria="search.case">Aa</button>
-    <button id="search-literal" class="btn icon" aria-pressed="true" data-i18n-title="search.literal" data-i18n-aria="search.literal">“ ”</button>
-    <button id="search-prev" class="btn icon" data-i18n-aria="search.prev" data-i18n-title="search.prev">↑</button>
-    <button id="search-next" class="btn icon" data-i18n-aria="search.next" data-i18n-title="search.next">↓</button>
-    <span id="search-count" class="muted" aria-live="polite"></span>
-    <select id="label-mode" class="btn" data-i18n-aria="label.mode">
-      <option value="full" data-i18n="label.full">Name</option>
-      <option value="surname" data-i18n="label.surname">Surname</option>
-      <option value="given" data-i18n="label.given">Given name</option>
-    </select>
-    <select id="layout-mode" class="btn" data-i18n-aria="layout.mode">
-      <option value="tree" data-i18n="layout.tree">Tree by tree</option>
-      <option value="layer" data-i18n="layout.layer">Generation by generation</option>
-    </select>
-    <button id="hl-mode" class="btn" data-i18n-title="hl.title"></button>
-    <button id="hl-blood" class="btn" aria-pressed="true"></button>
-    <button id="outlines" class="btn icon" aria-pressed="true" data-i18n-title="outlines.title" data-i18n-aria="outlines.title">A</button>
-  </div>
-  <div class="grp">
-    <button id="zoom-out" class="btn icon" data-i18n-aria="zoom.out" data-i18n-title="zoom.out">−</button>
-    <button id="zoom-in" class="btn icon" data-i18n-aria="zoom.in" data-i18n-title="zoom.in">+</button>
-    <button id="fit" class="btn" data-i18n="zoom.fit">Fit</button>
-    <button id="export" class="btn" data-i18n="export.menu">Export</button>
-    <button id="settings" class="btn" data-i18n="settings.open">Settings</button>
-  </div>
-</header>
 
-<main id="stage" class="stage">
-  <div id="quilt-wrap" class="quilt-wrap">
-    <canvas id="quilt" role="img" data-i18n-aria="quilt.label"></canvas>
-    <canvas id="minimap" class="minimap" width="200" height="140" data-i18n-aria="minimap.label"></canvas>
-    <div id="legend" class="legend"></div>
-    <div id="tip" class="tip" hidden></div>
-    <div id="empty" class="empty" hidden>
-      <h2 data-i18n="empty.title">No people yet</h2>
-      <p data-i18n="empty.body">Open a family file (GEDCOM) or add the first person.</p>
-      <button id="empty-open" class="btn primary" data-i18n="empty.open">Open a file…</button>
-      <button id="empty-add" class="btn" data-i18n="empty.add">Add a person</button>
+  <div class="main">
+    <header class="top" role="toolbar" data-i18n-aria="bar.label">
+      <button id="hist-back" class="btn icon plain" disabled data-i18n-title="hist.back" data-i18n-aria="hist.back"><span data-icon="back"></span></button>
+      <button id="hist-fwd" class="btn icon plain" disabled data-i18n-title="hist.forward" data-i18n-aria="hist.forward"><span data-icon="forward"></span></button>
+      <h1 id="title" class="title">Family Tree</h1>
+      <div class="searchbox">
+        <span class="si" data-icon="search" data-size="18"></span>
+        <input id="search" type="search" data-i18n-placeholder="search.placeholder" data-i18n-aria="search.label" autocomplete="off">
+        <span id="search-count" class="muted" aria-live="polite"></span>
+        <button id="search-prev" class="btn icon plain" data-i18n-aria="search.prev" data-i18n-title="search.prev">↑</button>
+        <button id="search-next" class="btn icon plain" data-i18n-aria="search.next" data-i18n-title="search.next">↓</button>
+      </div>
+      <span class="grow"></span>
+      <button id="export" class="btn icon plain" data-i18n-title="export.menu" data-i18n-aria="export.menu"><span data-icon="download"></span></button>
+      <button id="privacy-toggle" class="btn icon plain" aria-pressed="false" data-i18n-title="settings.privacy" data-i18n-aria="settings.privacy"><span data-icon="eye"></span></button>
+      <button id="bell" class="btn icon plain" data-i18n-title="nav.review" data-i18n-aria="nav.review"><span data-icon="bell"></span><span id="bell-badge" class="badge" hidden>0</span></button>
+    </header>
+
+    <div class="work">
+      <aside id="panel" class="panel" hidden aria-labelledby="panel-title"><div id="review-root"></div></aside>
+      <main id="stage" class="stage">
+        <div id="quilt-wrap" class="quilt-wrap">
+          <canvas id="quilt" role="img" data-i18n-aria="quilt.label"></canvas>
+          <canvas id="minimap" class="minimap" width="200" height="140" data-i18n-aria="minimap.label"></canvas>
+          <div id="legend" class="legend"></div>
+          <div class="zoomctl">
+            <button id="zoom-out" class="btn icon" data-i18n-aria="zoom.out" data-i18n-title="zoom.out"><span data-icon="minus" data-size="18"></span></button>
+            <button id="zoom-in" class="btn icon" data-i18n-aria="zoom.in" data-i18n-title="zoom.in"><span data-icon="plus" data-size="18"></span></button>
+            <button id="fit" class="btn" data-i18n="zoom.fit">Fit</button>
+            <button id="view-btn" class="btn" aria-expanded="false" aria-controls="view-pop" data-i18n-title="view.title"><span data-icon="view" data-size="18"></span> <span data-i18n="view.menu">View</span></button>
+            <div id="view-pop" class="pop" hidden>
+              <label class="field"><span data-i18n="view.labels">Names show</span>
+                <select id="label-mode">
+                  <option value="full" data-i18n="label.full">Name</option>
+                  <option value="surname" data-i18n="label.surname">Surname</option>
+                  <option value="given" data-i18n="label.given">Given name</option>
+                </select></label>
+              <label class="field"><span data-i18n="view.arrange">Arrange</span>
+                <select id="layout-mode">
+                  <option value="tree" data-i18n="layout.tree">Tree by tree</option>
+                  <option value="layer" data-i18n="layout.layer">Generation by generation</option>
+                </select></label>
+              <div class="field"><span data-i18n="view.highlight">When someone is selected</span>
+                <div class="row"><button id="hl-mode" class="btn" data-i18n-title="hl.title"></button><button id="hl-blood" class="btn" aria-pressed="true"></button></div></div>
+              <div class="field"><span data-i18n="view.search_options">Search</span>
+                <div class="row"><button id="search-case" class="btn" aria-pressed="false" data-i18n="search.case_short">Match case</button><button id="search-literal" class="btn" aria-pressed="true" data-i18n="search.literal_short">Exact text</button></div></div>
+              <div class="field"><button id="outlines" class="btn" aria-pressed="true" data-i18n-title="outlines.title" data-i18n="view.outlines">Outline names</button></div>
+            </div>
+          </div>
+          <div id="tip" class="tip" hidden></div>
+          <div id="empty" class="empty" hidden>
+            <h2 data-i18n="empty.title">No people yet</h2>
+            <p data-i18n="empty.body">Open a family file (GEDCOM) or add the first person.</p>
+            <button id="empty-open" class="btn primary" data-i18n="empty.open">Open a file…</button>
+            <button id="empty-add" class="btn" data-i18n="empty.add">Add a person</button>
+          </div>
+          <div id="strip" class="strip" hidden role="status">
+            <span id="strip-text"></span>
+            <button id="strip-keep" class="btn small" data-i18n="strip.keep">Keep current layout</button>
+          </div>
+          <aside id="side" class="side" hidden aria-labelledby="side-title"></aside>
+        </div>
+        <section id="screen-people" class="screen" hidden>
+          <div class="screen-head"><input id="people-filter" type="search" class="search" data-i18n-placeholder="people.filter"><button id="people-add" class="btn primary" data-i18n="people.add">Add a person</button></div>
+          <div id="people-list" class="list"></div>
+        </section>
+      </main>
     </div>
-    <div id="strip" class="strip" hidden role="status">
-      <span id="strip-text"></span>
-      <button id="strip-keep" class="btn small" data-i18n="strip.keep">Keep current layout</button>
-    </div>
-    <aside id="side" class="side" hidden aria-labelledby="side-title"></aside>
   </div>
-
-  <section id="screen-people" class="screen" hidden>
-    <div class="screen-head"><input id="people-filter" type="search" class="search" data-i18n-placeholder="people.filter"><button id="people-add" class="btn primary" data-i18n="people.add">Add a person</button></div>
-    <div id="people-list" class="list"></div>
-  </section>
-
-  <section id="screen-review" class="screen" hidden>
-    <div id="review-root"></div>
-  </section>
-</main>
+</div>
 
 <dialog id="dlg-settings" class="dlg"></dialog>
 <dialog id="dlg-export" class="dlg"></dialog>

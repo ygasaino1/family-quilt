@@ -3,7 +3,7 @@ import { api } from './api.js';
 import { Quilt } from './quilt.js';
 import { QuiltView } from './view.js';
 import { Minimap } from './minimap.js';
-import { h, toast } from './dom.js';
+import { h, toast, icon, fillIcons } from './dom.js';
 import { pref, setPref } from './prefs.js';
 import * as sidebar from './sidebar.js';
 import * as review from './review.js';
@@ -21,6 +21,11 @@ function applyAppearance() {
   else document.documentElement.dataset.theme = theme;
   document.documentElement.style.setProperty('--scale', pref('scale'));
   document.body.classList.toggle('privacy', pref('privacy') === '1');
+  const pt = document.getElementById('privacy-toggle');
+  if (pt) {
+    pt.setAttribute('aria-pressed', pref('privacy'));
+    pt.replaceChildren(icon(pref('privacy') === '1' ? 'eye-off' : 'eye'));
+  }
   app.view?.readColors();
   app.view && (app.view.privacy = pref('privacy') === '1');
 }
@@ -107,9 +112,7 @@ async function pollStatus() {
     const s = await api('/status');
     const prevPending = app.status?.pending_proposals ?? 0;
     app.status = s;
-    const badge = $('review-badge');
-    badge.hidden = !s.pending_proposals;
-    badge.textContent = s.pending_proposals;
+    setBadges(s.pending_proposals);
     if (s.pending_proposals > prevPending && app.status && lastDataKey !== null) toast(t('toast.new_proposal'));
     if (lastDataKey !== null && s.data_key !== lastDataKey) {
       lastDataKey = s.data_key;
@@ -122,13 +125,18 @@ async function pollStatus() {
   }
 }
 
+function setBadges(n) {
+  for (const id of ['review-badge', 'bell-badge']) {
+    $(id).hidden = !n;
+    $(id).textContent = n;
+  }
+}
+
 async function refreshAll() {
   const s = await api('/status');
   app.status = s;
   lastDataKey = s.data_key;
-  const badge = $('review-badge');
-  badge.hidden = !s.pending_proposals;
-  badge.textContent = s.pending_proposals;
+  setBadges(s.pending_proposals);
   await reload({ glide: true });
   review.onDataChanged();
 }
@@ -293,6 +301,22 @@ function bindToolbar() {
   $('fit').addEventListener('click', () => app.view.fit(true));
   $('export').addEventListener('click', () => exporter.open());
   $('settings').addEventListener('click', () => settings.open());
+  $('nav-agent').addEventListener('click', () => settings.open({ agent: true }));
+  $('bell').addEventListener('click', () => showScreen('review'));
+  const pop = $('view-pop');
+  const setPop = (open) => {
+    pop.hidden = !open;
+    $('view-btn').setAttribute('aria-expanded', String(open));
+  };
+  $('view-btn').addEventListener('click', () => setPop(pop.hidden));
+  document.addEventListener('pointerdown', (e) => !pop.hidden && !e.target.closest('.zoomctl') && setPop(false));
+  pop.addEventListener('keydown', (e) => e.key === 'Escape' && (setPop(false), $('view-btn').focus()));
+  $('privacy-toggle').addEventListener('click', () => {
+    setPref('privacy', pref('privacy') === '1' ? '0' : '1');
+    applyAppearance();
+  });
+  $('hist-back').addEventListener('click', () => stepHistory(-1));
+  $('hist-fwd').addEventListener('click', () => stepHistory(1));
   $('strip-keep').addEventListener('click', keepCurrent);
   $('empty-open').addEventListener('click', () => exporter.pickGedcom());
   $('empty-add').addEventListener('click', () => sidebar.addFirstPerson());
@@ -306,18 +330,41 @@ function bindToolbar() {
   });
 }
 
+// ---------- back / forward through the people you looked at ----------
+const hist = { ids: [], at: -1, moving: false };
+function trackSelection(e) {
+  if (hist.moving) return;
+  const sel = e.detail;
+  if (sel.length !== 1 || sel[0].kind !== 'row' || sel[0].ids.length !== 1) return;
+  const id = sel[0].ids[0];
+  if (hist.ids[hist.at] === id) return;
+  hist.ids = hist.ids.slice(0, hist.at + 1).concat(id).slice(-50);
+  hist.at = hist.ids.length - 1;
+  syncHistory();
+}
+function syncHistory() {
+  $('hist-back').disabled = hist.at <= 0;
+  $('hist-fwd').disabled = hist.at >= hist.ids.length - 1;
+}
+function stepHistory(d) {
+  const at = hist.at + d;
+  if (at < 0 || at >= hist.ids.length) return;
+  hist.at = at;
+  hist.moving = true;
+  app.openPerson(hist.ids[at]);
+  hist.moving = false;
+  syncHistory();
+}
+
 // ---------- screens ----------
 export function showScreen(name) {
-  for (const n of ['quilt', 'people', 'review']) {
-    $('nav-' + n).setAttribute('aria-pressed', String(n === name));
-  }
-  $('quilt-wrap').hidden = name !== 'quilt';
+  for (const n of ['quilt', 'people', 'review']) $('nav-' + n).setAttribute('aria-pressed', String(n === name));
+  $('quilt-wrap').hidden = name === 'people';
   $('screen-people').hidden = name !== 'people';
-  $('screen-review').hidden = name !== 'review';
-  $('tools-quilt').hidden = name !== 'quilt';
   if (name === 'review') review.show();
+  else review.hide();
   if (name === 'people') loadPeople();
-  if (name === 'quilt') app.view.resize();
+  if (name !== 'people') requestAnimationFrame(() => app.view.resize());
 }
 app.showScreen = showScreen;
 
@@ -339,12 +386,14 @@ async function main() {
   await loadLocale(new URLSearchParams(location.search).get('lang') || pref('lang'));
   document.title = t('app.name');
   applyDom();
+  fillIcons();
   app.view = new QuiltView($('quilt'));
   new Minimap($('minimap'), app.view);
   applyAppearance();
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyAppearance);
   initTooltip();
   bindToolbar();
+  app.view.addEventListener('select', trackSelection);
   syncHl();
   sidebar.init(app);
   review.init(app);
@@ -360,9 +409,7 @@ async function main() {
   lastDataKey = s.data_key;
   $('title').textContent = st.tree_title || t('app.name');
   app.setTitle = (x) => ($('title').textContent = x || t('app.name'));
-  const badge = $('review-badge');
-  badge.hidden = !s.pending_proposals;
-  badge.textContent = s.pending_proposals;
+  setBadges(s.pending_proposals);
   await reload({ fit: true });
   setInterval(pollStatus, 5000);
   document.documentElement.dataset.ready = '1';

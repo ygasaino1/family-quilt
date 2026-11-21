@@ -153,7 +153,9 @@ try {
     await page.keyboard.down('Shift');
     await page.mouse.click(deeAt.x, deeAt.y);
     await page.keyboard.up('Shift');
-    await page.waitForFunction(() => window.__app.view.sel.length === 2);
+    await page.waitForFunction(() => window.__app.view.sel.length === 2, null, { timeout: 5000 }).catch(async (e) => {
+      throw new Error('second selection missing: ' + JSON.stringify(await page.evaluate(() => ({ sel: window.__app.view.sel, hover: window.__app.view.hover, tf: window.__app.view.tf, anim: !!window.__app.view.anim, side: !document.getElementById('side').hidden }))) + ' dee at ' + JSON.stringify(deeAt));
+    });
     const colours = await page.evaluate(() => window.__app.view.sel.map((s) => s.colour));
     assert.notEqual(colours[0], colours[1]);
     await page.waitForSelector('#side h2');
@@ -226,7 +228,7 @@ try {
     assert.match(text, /Cy was born in 1975/);
     assert.match(text, /1975/);
     assert.match(text, /Zoe/);
-    await page.waitForFunction(() => document.getElementById('review-canvas') && window.__app && true);
+    await page.waitForTimeout(1500);
     await page.screenshot({ path: path.join(out, 'light-review.png') });
     await page.click('#review-approve');
     await page.waitForFunction(() => document.getElementById('review-badge').hidden, null, { timeout: 8000 });
@@ -257,7 +259,7 @@ try {
     assert.ok(b.x !== a.x && b.k > a.k);
     await page.keyboard.press('0');
     await page.waitForTimeout(400);
-    const small = await page.$$eval('.bar .btn:not(.small), .bar .tab, .bar select, .bar input', (els) => els.filter((e) => e.offsetParent).map((e) => [e.id || e.textContent.trim(), e.getBoundingClientRect()]).filter(([, r]) => r.height < 43.5 || r.width < 43.5).map(([n]) => n));
+    const small = await page.$$eval('.top .btn:not(.small), .rail-btn, .top input, .zoomctl .btn', (els) => els.filter((e) => e.offsetParent).map((e) => [e.id || e.textContent.trim(), e.getBoundingClientRect()]).filter(([, r]) => r.height < 43.5 || r.width < 43.5).map(([n]) => n));
     assert.deepEqual(small, []);
   });
 
@@ -285,6 +287,7 @@ try {
   });
 
   await check('label modes, layer-by-layer mode and privacy mode', async () => {
+    await page.click('#view-btn');
     await page.selectOption('#label-mode', 'surname');
     assert.equal(await page.evaluate(() => window.__app.view.q.label(0, 'surname')), 'Root');
     await page.selectOption('#label-mode', 'full');
@@ -292,6 +295,7 @@ try {
     await page.waitForFunction(() => window.__app.view.q.payload.mode === 'layer');
     await page.selectOption('#layout-mode', 'tree');
     await page.waitForFunction(() => window.__app.view.q.payload.mode === 'tree');
+    await page.keyboard.press('Escape');
     await page.click('#settings');
     await page.check('#set-privacy');
     assert.equal(await page.evaluate(() => window.__app.view.privacy), true);
@@ -333,6 +337,7 @@ try {
     assert.deepEqual(after.sel, [id]);
     assert.equal(after.layout, 'full');
     // Start another careful layout and keep the current one.
+    await page.click('#view-btn');
     await page.selectOption('#layout-mode', 'layer');
     await page.waitForFunction(() => !document.getElementById('strip').hidden, null, { timeout: 15000 });
     await page.click('#strip-keep');
@@ -344,8 +349,10 @@ try {
       await sleep(100);
     }
     assert.ok(pr.job.state === 'cancelled' || pr.job.state === 'done', 'the job stops soon after "keep current layout": ' + JSON.stringify(pr.job));
+    await page.click('#view-btn');
     await page.selectOption('#layout-mode', 'tree');
     await page.waitForFunction(() => window.__app.view.q.payload.mode === 'tree');
+    await page.keyboard.press('Escape');
   });
 
   await check('dark theme renders and differs from light', async () => {
@@ -383,9 +390,9 @@ try {
     const p2 = await ctx.newPage();
     await p2.goto(base + '/?lang=qps');
     await p2.waitForSelector('html[data-ready="1"]');
-    const txt = await p2.textContent('.bar');
+    const txt = await p2.textContent('.top');
     assert.match(txt, /⟦/);
-    const plain = await p2.$$eval('.bar button, .bar select option', (els) => els.map((e) => e.textContent.trim()).filter((x) => x && !x.includes('⟦') && !/^[A-Za-z]{0,2}$|^[−+↑↓“” ]*$/.test(x)));
+    const plain = await p2.$$eval('.top button, .zoomctl button, .zoomctl option', (els) => els.map((e) => e.textContent.trim()).filter((x) => x && !x.includes('⟦') && !/^[A-Za-z0-9]{0,2}$|^[−+↑↓“” ]*$/.test(x)));
     assert.deepEqual(plain, [], 'untranslated toolbar strings: ' + plain.join(', '));
   });
 } catch (e) {

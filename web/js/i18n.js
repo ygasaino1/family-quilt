@@ -60,3 +60,15 @@ export function fmtDate(s, qualifier) {
   if (qualifier && qualifier !== 'exact') return t('date.' + qualifier, { date: text });
   return text;
 }
+
+/** "3 min ago" from an ISO time, in the page language. */
+export function fmtAgo(iso) {
+  const then = Date.parse(iso);
+  if (!then) return '';
+  const secs = Math.round((then - Date.now()) / 1000);
+  if (Math.abs(secs) < 45) return t('ago.now');
+  const rtf = new Intl.RelativeTimeFormat(lang === 'qps' ? 'en' : lang, { numeric: 'auto' });
+  const units = [['day', 86400], ['hour', 3600], ['minute', 60]];
+  for (const [u, s] of units) if (Math.abs(secs) >= s) return rtf.format(Math.round(secs / s), u);
+  return rtf.format(secs, 'second');
+}

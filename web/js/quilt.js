@@ -50,6 +50,12 @@ export class Quilt {
       this.colMin[j] = lo === Infinity ? 0 : lo;
       this.colMax[j] = hi === -Infinity ? 0 : hi;
     }
+    // Labels end before the leftmost mark of their row, header cells included.
+    this.labelFirst = Int32Array.from(this.first);
+    for (let j = 0; j < this.m; j++) {
+      const r = this.colMin[j] - 1;
+      if (r >= 0 && r < this.n && this.cols[j].p.length + this.cols[j].c.length > 0 && (this.labelFirst[r] < 0 || j < this.labelFirst[r])) this.labelFirst[r] = j;
+    }
   }
 
   /** The cell of column j at row r: {role:'parent'} | {role:'child', cell} | null. */

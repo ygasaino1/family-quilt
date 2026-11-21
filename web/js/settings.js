@@ -19,7 +19,7 @@ function pick(id, label, key, options) {
   return h('div', { class: 'field' }, h('label', { for: id }, label), sel);
 }
 
-export async function open() {
+export async function open({ agent = false } = {}) {
   const dlg = document.getElementById('dlg-settings');
   const s = await api('/settings').catch(() => ({ tree_title: '' }));
   const status = app.status || (await api('/status'));
@@ -58,6 +58,10 @@ export async function open() {
     h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: () => dlg.close() }, t('common.close'))),
   );
   dlg.showModal();
+  if (agent) {
+    agentBtn.click();
+    agentBox.scrollIntoView?.();
+  }
 }
 
 async function backup() {

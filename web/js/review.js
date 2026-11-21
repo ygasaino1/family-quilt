@@ -1,47 +1,51 @@
-// The review screen: what an AI assistant proposed, in your words and theirs, with before/after.
-import { t } from './i18n.js';
+// The review panel, docked beside the quilt: what an AI assistant proposed, in your words and theirs.
+import { t, fmtAgo } from './i18n.js';
 import { api } from './api.js';
-import { h, toast, confirmBox, sexWord, fill } from './dom.js';
-import { Quilt } from './quilt.js';
-import { QuiltView } from './view.js';
+import { h, toast, confirmBox, sexWord, fill, icon } from './dom.js';
 
 let app;
 let selected = null;
-let miniView = null;
+const panel = () => document.getElementById('panel');
 const root = () => document.getElementById('review-root');
 
 export function init(a) {
   app = a;
 }
 
+export function hide() {
+  panel().hidden = true;
+}
+
 export function onDataChanged() {
-  if (!document.getElementById('screen-review').hidden) show(selected);
+  if (!panel().hidden) show(selected);
 }
 
 const val = (v) => (v === null || v === undefined || v === '' ? h('i', { class: 'muted' }, t('review.empty')) : typeof v === 'object' ? JSON.stringify(v) : String(v));
-const fieldName = (f) => {
-  const k = 'field.' + f;
-  return t(k);
-};
+const agentName = (by) => String(by || '').replace(/^agent:/, '') || t('review.someone');
+const born = (q) => (q.birth ? String(q.birth.date ?? q.birth) : '');
+const WARN_CODES = ['parent_too_young', 'parent_too_old', 'parent_died_before_birth', 'death_before_birth', 'possible_duplicate', 'link_kind_impact', 'person_removal_impact'];
 
 export async function show(id) {
   selected = id || selected;
+  panel().hidden = false;
   let list;
   try {
     list = await api('/proposals?status=pending');
   } catch (e) {
-    return root().replaceChildren(h('p', { class: 'conflict' }, e.message));
+    return fill(root(), h('p', { class: 'conflict' }, e.message));
   }
   const props = list.proposals;
   if (!props.length) {
     selected = null;
-    return root().replaceChildren(h('div', { class: 'card' }, h('h2', {}, t('review.title')), h('p', {}, t('review.none'))));
+    return fill(root(), h('p', { class: 'eyebrow', id: 'panel-title' }, t('review.title')), h('div', { class: 'prop' }, t('review.none')));
   }
   if (!props.some((p) => p.id === selected)) selected = props[0].id;
-  const left = h('div', { class: 'card', style: 'max-inline-size:none' }, h('h2', {}, t('review.pending_n', { n: props.length })),
-    h('div', { class: 'list' }, props.map((p) => h('button', { class: 'item', 'aria-current': p.id === selected ? 'true' : null, onclick: () => show(p.id) }, h('b', {}, p.summary || t('review.no_summary')), h('span', { class: 'muted' }, p.created_by.replace('agent:', '') + ' · ' + String(p.created_at).slice(0, 16).replace('T', ' '))))));
-  const detail = h('div', { id: 'review-detail' }, t('common.loading'));
-  root().replaceChildren(left, detail);
+  const detail = h('div', { id: 'review-detail', class: 'prop' }, t('common.loading'));
+  fill(root(), h('p', { class: 'eyebrow', id: 'panel-title' }, t('review.title')), detail,
+    props.filter((p) => p.id !== selected).map((p) =>
+      h('button', { class: 'prop collapsed', onclick: () => show(p.id) },
+        h('span', { class: 'meta' }, h('span', {}, t('review.from', { agent: agentName(p.created_by) })), h('span', {}, fmtAgo(p.created_at))),
+        h('b', {}, p.summary || t('review.no_summary')), h('span', { class: 'dot', 'aria-hidden': 'true' }))));
   await renderDetail(detail, selected);
 }
 
@@ -50,68 +54,62 @@ async function renderDetail(box, id) {
   try {
     v = await api('/proposals/' + id);
   } catch (e) {
-    return box.replaceChildren(h('p', { class: 'conflict' }, e.message));
+    return fill(box, h('p', { class: 'conflict' }, e.message));
   }
   const p = v.proposal;
   const blocked = v.depends_on.filter((d) => d.status === 'pending');
-  const checks = []; // {change, field, box, conflict, overwriteBox}
+  const checks = []; // {change, field, box, conflict, over}
 
-  const yours = h('div', {}, h('h3', {}, t('review.your_words')), p.source_text ? h('div', { class: 'quote' }, p.source_text) : h('p', { class: 'muted' }, t('review.no_source')));
-  const theirs = h('div', {}, h('h3', {}, t('review.their_understanding')), h('p', {}, p.summary || ''), h('p', { class: 'muted' }, t('review.counts', { people: v.new_people.length, links: v.new_relationships.length, changes: v.changes.length })));
+  const items = [];
+  for (const q of v.new_people) {
+    items.push(h('div', { class: 'item-row' }, h('span', { class: 'waiting' }, t('review.waiting')), h('span', { class: 'nm' }, q.display_name, born(q) ? ` · ${born(q)} –` : ''),
+      h('button', { class: 'link', title: t('review.show_in_tree'), 'aria-label': t('review.show_in_tree'), onclick: () => app.view.q && app.openPerson(q.id) }, icon('tree', 16))));
+  }
+  for (const r of v.new_relationships) {
+    items.push(h('div', { class: 'item-row' }, h('span', { class: 'waiting' }, t('review.waiting')), h('span', { class: 'nm' },
+      r.rel_type === 'parent_child' ? t('review.link_parent', { a: r.a_name, b: r.b_name, kind: t('kind.' + (r.kind || 'unknown')) }) : t('review.link_partner', { a: r.a_name, b: r.b_name, state: t('state.' + (r.subtype || 'unknown') + '.long') }))));
+  }
 
-  const newPeople = v.new_people.length
-    ? h('div', { class: 'card' }, h('h3', {}, t('review.new_people')), h('ul', { class: 'linklist' }, v.new_people.map((q) => h('li', {}, h('span', { class: 'pill pending' }, t('status.pending')), ' ', h('b', {}, q.display_name), ' ', h('span', { class: 'muted' }, [t('sex.' + sexWord(q.sex)), q.birth ? '* ' + String(q.birth.date ?? q.birth) : '', q.death ? '† ' + String(q.death.date ?? q.death) : ''].filter(Boolean).join(' · ')), q.agent_note ? h('div', { class: 'muted' }, q.agent_note) : null))))
-    : null;
-  const newLinks = v.new_relationships.length
-    ? h('div', { class: 'card' }, h('h3', {}, t('review.new_links')), h('ul', { class: 'linklist' }, v.new_relationships.map((r) => h('li', {}, r.rel_type === 'parent_child' ? t('review.link_parent', { a: r.a_name, b: r.b_name, kind: t('kind.' + (r.kind || 'unknown')) }) : t('review.link_partner', { a: r.a_name, b: r.b_name, state: t('state.' + (r.subtype || 'unknown') + '.long') })))))
-    : null;
-
-  const changes = v.changes.map((c) => {
-    const rows = [];
+  const changeBlocks = [];
+  for (const c of v.changes) {
     if (c.op === 'remove') {
       const cb = h('input', { type: 'checkbox', id: 'rm-' + c.id });
-      checks.push({ change: c, field: 'remove', box: cb, conflict: false });
-      return h('div', { class: 'card' }, h('h3', {}, t('review.remove_title', { name: c.target_label })),
-        h('div', { class: 'warn' }, t('review.remove_warning')),
-        h('label', {}, cb, ' ', t('review.remove_tick')),
-        c.stale ? h('p', { class: 'conflict' }, t('review.stale')) : null);
+      checks.push({ change: c, field: 'remove', box: cb });
+      changeBlocks.push(h('div', { class: 'warncard' }, icon('warn', 22), h('b', {}, t('review.remove_title', { name: c.target_label })), h('span', {}, t('review.remove_warning')), h('label', {}, cb, ' ', t('review.remove_tick'))));
+      continue;
     }
     for (const f of c.fields) {
-      const accept = h('input', { type: 'checkbox', id: `f-${c.id}-${f.field}`, checked: !f.conflict });
+      const accept = h('input', { type: 'checkbox', id: `f-${c.id}-${f.field}`, checked: !f.conflict, 'aria-label': t('review.accept') });
       const over = f.conflict ? h('input', { type: 'checkbox', id: `o-${c.id}-${f.field}` }) : null;
-      checks.push({ change: c, field: f.field, box: accept, conflict: f.conflict, over });
-      rows.push(h('tr', {}, h('td', {}, h('label', {}, accept, ' ', fieldName(f.field))), h('td', { class: 'from' }, val(f.from)), h('td', { class: 'to' }, val(f.to)),
-        h('td', {}, f.conflict ? h('div', { class: 'conflict' }, t('review.conflict', { current: String(f.current ?? '') }), h('label', {}, over, ' ', t('review.overwrite'))) : '')));
+      checks.push({ change: c, field: f.field, box: accept, over });
+      changeBlocks.push(h('div', { class: 'sugg' },
+        h('span', { class: 'what' }, c.target_label, ' · ', t('field.' + f.field)),
+        h('span', { class: 'from' }, val(f.from)), h('span', { class: 'arrow' }, '→'), h('span', { class: 'to' }, val(f.to)),
+        h('label', {}, accept, ' ', t('review.accept')),
+        f.conflict ? h('div', { class: 'conflict' }, t('review.conflict', { current: String(f.current ?? '') }), h('label', {}, over, ' ', t('review.overwrite'))) : null));
     }
-    return h('div', { class: 'card' }, h('h3', {}, c.target_label), c.target_missing ? h('p', { class: 'conflict' }, t('review.missing')) : null,
-      h('table', { class: 'diff' }, h('thead', {}, h('tr', {}, h('th', {}, t('review.col_field')), h('th', {}, t('review.col_before')), h('th', {}, t('review.col_after')), h('th', {}))), h('tbody', {}, rows)));
+  }
+
+  const warns = v.warnings.map((w) => {
+    const existing = Array.isArray(w.params?.existing) ? w.params.existing[0] : null;
+    return h('div', { class: 'warncard' }, icon('warn', 22), h('b', {}, WARN_CODES.includes(w.code) ? t('warn.' + w.code) : t('review.warnings')), h('span', {}, w.message),
+      existing ? h('button', { class: 'link', onclick: () => app.showScreen('quilt') || app.openPerson(existing) }, t('review.open_existing')) : null);
   });
-
-  const warns = v.warnings.length ? h('div', { class: 'card' }, h('h3', {}, t('review.warnings')), v.warnings.map((w) => h('div', { class: 'warn' }, w.message))) : null;
-  const deps = blocked.length ? h('div', { class: 'warn', id: 'review-blocked' }, t('review.blocked'), ' ', blocked.map((d) => h('button', { class: 'link', onclick: () => show(d.proposal_id) }, d.summary || d.proposal_id))) : null;
-
-  const quiltBox = h('div', { class: 'review-quilt' }, h('canvas', { id: 'review-canvas' }));
-  const approve = h('button', { class: 'btn primary', id: 'review-approve', disabled: blocked.length > 0, onclick: () => doApprove(id, checks) }, t('review.approve'));
-  const reject = h('button', { class: 'btn danger', id: 'review-reject', onclick: () => doReject(id) }, t('review.reject'));
+  const deps = blocked.length ? h('div', { class: 'warncard', id: 'review-blocked' }, icon('warn', 22), h('b', {}, t('review.blocked')), blocked.map((d) => h('button', { class: 'link', onclick: () => show(d.proposal_id) }, d.summary || d.proposal_id))) : null;
 
   fill(box,
-    h('div', { class: 'card' }, h('h2', {}, p.summary || t('review.no_summary')), h('p', { class: 'muted' }, p.created_by.replace('agent:', '') + ' · ' + String(p.created_at).slice(0, 16).replace('T', ' ')), h('div', { class: 'two' }, yours, theirs)),
+    h('div', { class: 'meta' }, h('span', {}, t('review.from', { agent: agentName(p.created_by) })), h('span', {}, fmtAgo(p.created_at))),
+    h('h2', {}, p.summary || t('review.no_summary')),
+    h('div', { class: 'told' }, h('p', { class: 'eyebrow' }, t('review.your_words')), p.source_text ? h('div', {}, p.source_text) : h('i', { class: 'muted' }, t('review.no_source'))),
+    items.length ? [h('p', { class: 'eyebrow' }, t('review.understood')), h('div', { class: 'items' }, items)] : null,
+    changeBlocks.length ? [h('p', { class: 'eyebrow', style: 'margin-top:14px' }, t('review.suggested')), changeBlocks] : null,
     deps, warns,
-    h('div', { class: 'card' }, h('h3', {}, t('review.picture')), quiltBox),
-    newPeople, newLinks, ...changes,
-    h('div', { class: 'actions', style: 'max-inline-size:64rem' }, reject, approve),
-  );
-  // The picture: only this proposal's people and their direct relatives.
-  try {
-    if (miniView) miniView.dispose?.();
-    miniView = new QuiltView(document.getElementById('review-canvas'));
-    miniView.readColors();
-    const payload = await api('/quilt?review=' + encodeURIComponent(id));
-    miniView.setQuilt(new Quilt(payload), { fit: true });
-    miniView.fit(false);
-  } catch (e) {
-    console.warn(e);
-  }
+    h('div', { class: 'actions' },
+      h('button', { class: 'btn primary', id: 'review-approve', disabled: blocked.length > 0, onclick: () => doApprove(id, checks) }, t('review.approve')),
+      h('button', { class: 'btn', id: 'review-reject', onclick: () => doReject(id) }, t('review.reject'))));
+  // Show the proposal's people in the quilt: pending rows already carry the amber frame.
+  const first = v.new_people[0];
+  if (first && app.view.q?.idRow.has(first.id)) app.view.centerOnRow(app.view.q.idRow.get(first.id), true);
 }
 
 async function doApprove(id, checks) {

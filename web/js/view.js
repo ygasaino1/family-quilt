@@ -618,7 +618,7 @@ export class QuiltView extends EventTarget {
     ctx.lineJoin = 'round';
     for (let i = r0; i <= r1; i++) {
       const p = q.people[i];
-      const first = q.first[i] < 0 ? 0 : q.first[i];
+      const first = q.labelFirst[i] < 0 ? 0 : q.labelFirst[i];
       const sx = x + cx(first) * k - 4;
       const top = y + ry(i) * k;
       const sy = top + (RH * k) / 2;
