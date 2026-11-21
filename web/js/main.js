@@ -162,11 +162,9 @@ function updateLegend() {
   };
   const L = $('legend');
   L.replaceChildren(
-    h('span', {}, svg({}), t('legend.male')),
-    h('span', {}, svg({ round: true }), t('legend.female')),
-    h('span', {}, svg({ hollow: true }), t('legend.not_birth')),
-    h('span', {}, svg({ pending: true }), t('legend.pending')),
-    h('span', {}, 'M U D ?', ' ', t('legend.header')),
+    h('span', {}, svg({ round: true }), t('legend.blood')),
+    h('span', {}, svg({ round: true, hollow: true }), t('legend.not_blood')),
+    h('span', {}, svg({ pending: true }), t('legend.waiting')),
   );
 }
 
@@ -222,7 +220,7 @@ function gotoMatch(step) {
   search.idx = (search.idx + step + search.rows.length) % search.rows.length;
   const r = search.rows[search.idx];
   const v = app.view;
-  v.centerOn((v.q.first[r] < 0 ? 0 : v.q.first[r]) * 26 + 13, r * 24 + 12, true);
+  v.centerOnRow(r, true);
   v.setSelection([{ kind: 'row', ids: [v.q.people[r].id] }]);
   $('search-count').textContent = t('search.count', { i: search.idx + 1, n: search.rows.length });
 }

@@ -2,14 +2,13 @@
 // World units: one column is CW wide, one row is RH tall; the header band sits above row 0.
 import { t } from './i18n.js';
 
-export const CW = 26;
-export const RH = 24;
-export const HH = 24;
-export const LABEL_W = 190;
-const HALF = 9; // half the size of a cell shape
+export const CW = 20;
+export const RH = 20;
+export const HH = 20; // the header cell is one row high
+export const LABEL_W = 210;
+const HALF = 8.4; // half the size of a cell shape: shapes nearly fill their cell
 const MIN_K = 0.01;
 const MAX_K = 8;
-const STATE_LETTER = { married: 'state.married', unmarried: 'state.unmarried', divorced: 'state.divorced', ended: 'state.divorced', unknown: 'state.unknown' };
 
 const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -55,7 +54,7 @@ export class QuiltView extends EventTarget {
     const cs = getComputedStyle(document.documentElement);
     const g = (n) => cs.getPropertyValue(n).trim();
     this.colors = {
-      bg: g('--quilt-bg'), fg: g('--quilt-fg'), grid: g('--quilt-line'), muted: g('--muted'), dead: g('--quilt-dead'),
+      bg: g('--quilt-bg'), cell: g('--quilt-cell'), fg: g('--quilt-fg'), line: g('--quilt-line'), muted: g('--muted'), dead: g('--quilt-dead'),
       pending: g('--pending'), head: g('--quilt-head'), match: g('--match'), focus: g('--focus'),
       sel: [1, 2, 3, 4, 5, 6, 7].map((i) => g('--sel' + i)),
     };
@@ -98,7 +97,7 @@ export class QuiltView extends EventTarget {
   // ---------- view transform ----------
   bounds() {
     const q = this.q;
-    return { x0: -LABEL_W, y0: -HH, x1: Math.max(1, q ? q.m : 1) * CW + 20, y1: Math.max(1, q ? q.n : 1) * RH + 20 };
+    return { x0: -LABEL_W, y0: -HH - 6, x1: Math.max(1, q ? q.m : 1) * CW + 20, y1: Math.max(1, q ? q.n : 1) * RH + 20 };
   }
 
   fit(animate = true) {
@@ -140,6 +139,11 @@ export class QuiltView extends EventTarget {
   centerOn(wx, wy, animate = true) {
     const { w, h } = this.size;
     this.moveTo({ k: this.tf.k, x: w / 2 - wx * this.tf.k, y: h / 2 - wy * this.tf.k }, animate);
+  }
+
+  centerOnRow(r, animate = true) {
+    const q = this.q;
+    this.centerOn(Math.max(0, q.first[r]) * CW + CW / 2, r * RH + RH / 2, animate);
   }
 
   rowCenterY(i) {
@@ -290,10 +294,10 @@ export class QuiltView extends EventTarget {
     const wx = (sx - x) / k;
     const wy = (sy - y) / k;
     const a = this.anim; // during the glide, pick what is drawn, not where it is going
-    if (wy < 0) {
-      if (wy < -HH) return null;
-      const j = Math.floor(wx / CW);
-      return j >= 0 && j < q.m ? { type: 'col', col: j } : null;
+    if (!a) {
+      // The header cell of column j sits in the row above its top member.
+      const j0 = Math.floor(wx / CW);
+      if (j0 >= 0 && j0 < q.m && Math.floor(wy / RH) === q.colMin[j0] - 1) return { type: 'col', col: j0 };
     }
     let r = Math.floor(wy / RH);
     let j = Math.floor(wx / CW);
@@ -318,7 +322,7 @@ export class QuiltView extends EventTarget {
 
   labelWidth(r, fs) {
     this.ctx.font = `${fs}px ${this.font()}`;
-    return this.ctx.measureText(this.q.label(r, this.labelMode)).width + 8;
+    return this.ctx.measureText(this.q.labelText(r, this.labelMode)).width + 8;
   }
 
   font() {
@@ -326,7 +330,7 @@ export class QuiltView extends EventTarget {
   }
 
   fontSize() {
-    return Math.min(RH * this.tf.k * 0.6, 20);
+    return Math.min(RH * this.tf.k * 0.8, 22);
   }
 
   hoverAt(e) {
@@ -405,18 +409,29 @@ export class QuiltView extends EventTarget {
     const { x, y, k } = this.tf;
     const vis = this.visible();
     const anim = this.anim;
-    const ry = anim ? (i) => anim.rowY[i] : (i) => i * RH;
+    const ry = anim ? (i) => (i < 0 ? i * RH : anim.rowY[i]) : (i) => i * RH;
     const cx = anim ? (j) => anim.colX[j] : (j) => j * CW;
     const r0 = anim ? 0 : clamp(Math.floor(vis.y0 / RH) - 1, 0, q.n - 1);
     const r1 = anim ? q.n - 1 : clamp(Math.ceil(vis.y1 / RH) + 1, 0, q.n - 1);
     const c0 = anim || !q.m ? 0 : clamp(Math.floor(vis.x0 / CW) - 1, 0, q.m - 1);
     const c1 = anim ? q.m - 1 : q.m ? clamp(Math.ceil(vis.x1 / CW) + 1, 0, q.m - 1) : -1;
-    const px = CW * k; // on-screen width of one column
-
-    ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * x, dpr * y);
+    const px = CW * k; // on-screen size of one cell
+    const detail = px >= 5;
     const lw = (n) => n / k; // n screen pixels, in world units
 
-    // 1. selection bands
+    ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * x, dpr * y);
+    // 1. the strips: a row strip from a person's first to last family, a column strip from the header to the last member
+    ctx.fillStyle = C.cell;
+    for (let i = r0; i <= r1; i++) {
+      const a = q.first[i];
+      if (a >= 0) ctx.fillRect(cx(a), ry(i), cx(q.last[i]) + CW - cx(a), RH);
+    }
+    for (let j = c0; j <= c1; j++) {
+      const top = ry(q.colMin[j] - 1);
+      ctx.fillRect(cx(j), top, CW, ry(q.colMax[j]) + RH - top);
+    }
+
+    // 2. selection bands over the strips
     const band = (colour, a, x0, y0, x1, y1) => {
       ctx.globalAlpha = a;
       ctx.fillStyle = C.sel[colour];
@@ -425,8 +440,8 @@ export class QuiltView extends EventTarget {
     for (let i = r0; i <= r1; i++) {
       const s = this.selRows.get(i);
       const rel = s === undefined ? this.relRows.get(i) : undefined;
-      if (s !== undefined) band(s, 0.3, vis.x0, ry(i), vis.x1, ry(i) + RH);
-      else if (rel !== undefined) band(rel, 0.14, vis.x0, ry(i), vis.x1, ry(i) + RH);
+      if (s !== undefined) band(s, 0.34, vis.x0, ry(i), vis.x1, ry(i) + RH);
+      else if (rel !== undefined) band(rel, 0.16, vis.x0, ry(i), vis.x1, ry(i) + RH);
       if (this.matches.has(i)) {
         ctx.globalAlpha = 1;
         ctx.strokeStyle = C.match;
@@ -434,34 +449,76 @@ export class QuiltView extends EventTarget {
         ctx.strokeRect(vis.x0, ry(i) + 1, vis.x1 - vis.x0, RH - 2);
       }
     }
-    for (const [j, colour] of this.selCols) if (j >= c0 && j <= c1) band(colour, 0.3, cx(j), vis.y0, cx(j) + CW, vis.y1);
+    for (const [j, colour] of this.selCols) if (j >= c0 && j <= c1) band(colour, 0.34, cx(j), vis.y0, cx(j) + CW, vis.y1);
     ctx.globalAlpha = 1;
 
-    // 2. row lines and column lines
-    ctx.strokeStyle = C.grid;
-    ctx.lineWidth = Math.max(lw(1), 0.6);
+    // 3. cell borders: every cell of a strip is boxed, like the original quilt
+    ctx.strokeStyle = C.line;
+    ctx.lineWidth = Math.max(lw(1), 0.4);
     ctx.beginPath();
-    for (let i = r0; i <= r1; i++) {
-      const a = q.first[i];
-      const b = q.last[i];
-      if (a < 0 || a === b) continue;
-      const yy = ry(i) + RH / 2;
-      ctx.moveTo(cx(a) + CW / 2, yy);
-      ctx.lineTo(cx(b) + CW / 2, yy);
-    }
-    for (let j = c0; j <= c1; j++) {
-      ctx.moveTo(cx(j) + CW / 2, ry(q.colMin[j]) + RH / 2);
-      ctx.lineTo(cx(j) + CW / 2, ry(q.colMax[j]) + RH / 2);
+    if (px < 3) {
+      ctx.globalAlpha = 0.75;
+      for (let i = r0; i <= r1; i++) {
+        const a = q.first[i];
+        if (a >= 0 && a !== q.last[i]) {
+          ctx.moveTo(cx(a) + CW / 2, ry(i) + RH / 2);
+          ctx.lineTo(cx(q.last[i]) + CW / 2, ry(i) + RH / 2);
+        }
+      }
+      for (let j = c0; j <= c1; j++) {
+        ctx.moveTo(cx(j) + CW / 2, ry(q.colMin[j]) + RH / 2);
+        ctx.lineTo(cx(j) + CW / 2, ry(q.colMax[j]) + RH / 2);
+      }
+    } else {
+      for (let i = r0; i <= r1; i++) {
+        const a = q.first[i];
+        if (a < 0) continue;
+        const b = q.last[i];
+        const yt = ry(i);
+        const xl = cx(a);
+        const xr = cx(b) + CW;
+        ctx.moveTo(xl, yt);
+        ctx.lineTo(xr, yt);
+        ctx.moveTo(xl, yt + RH);
+        ctx.lineTo(xr, yt + RH);
+        ctx.moveTo(xl, yt);
+        ctx.lineTo(xl, yt + RH);
+        ctx.moveTo(xr, yt);
+        ctx.lineTo(xr, yt + RH);
+        if (detail) for (let j = Math.max(a + 1, c0); j <= Math.min(b, c1); j++) {
+          ctx.moveTo(cx(j), yt);
+          ctx.lineTo(cx(j), yt + RH);
+        }
+      }
+      for (let j = c0; j <= c1; j++) {
+        const xl = cx(j);
+        const top = ry(q.colMin[j] - 1);
+        const bottom = ry(q.colMax[j]) + RH;
+        ctx.moveTo(xl, top);
+        ctx.lineTo(xl, bottom);
+        ctx.moveTo(xl + CW, top);
+        ctx.lineTo(xl + CW, bottom);
+        ctx.moveTo(xl, top);
+        ctx.lineTo(xl + CW, top);
+        ctx.moveTo(xl, ry(q.colMin[j]));
+        ctx.lineTo(xl + CW, ry(q.colMin[j]));
+        ctx.moveTo(xl, bottom);
+        ctx.lineTo(xl + CW, bottom);
+        if (detail) for (let i = Math.max(q.colMin[j], r0); i <= Math.min(q.colMax[j], r1); i++) {
+          ctx.moveTo(xl, ry(i) + RH);
+          ctx.lineTo(xl + CW, ry(i) + RH);
+        }
+      }
     }
     ctx.stroke();
+    ctx.globalAlpha = 1;
 
-    // 3. cells
+    // 4. marks
     if (px >= 1.2) this.drawCells(q, c0, c1, r0, r1, ry, cx, px, lw);
 
-    // 4. header band (screen space)
+    // 5. text, in screen space
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    this.drawHeader(q, c0, c1, cx, px);
-    // 5. labels
+    this.drawHeaders(q, c0, c1, ry, cx, px);
     this.drawLabels(q, r0, r1, ry, cx);
   }
 
@@ -474,7 +531,7 @@ export class QuiltView extends EventTarget {
     const hollowM = new Path2D();
     const hollowF = new Path2D();
     const hollowO = new Path2D();
-    const pend = [];
+    const links = []; // cells of a link that is waiting for review
     const shape = (path, sex, mx, my, hs) => {
       if (sex === 'M') path.rect(mx - hs, my - hs, hs * 2, hs * 2);
       else if (sex === 'F') {
@@ -492,93 +549,60 @@ export class QuiltView extends EventTarget {
     for (let j = c0; j <= c1; j++) {
       const col = q.cols[j];
       const mx = cx(j) + CW / 2;
-      const drawOne = (r, hollow, pending) => {
+      const drawOne = (r, hollow, linkPending) => {
         if (r < r0 || r > r1) return;
         const sex = q.people[r].s;
         const my = ry(r) + RH / 2;
         if (tiny) {
-          ctx.fillStyle = pending ? C.pending : C.fg;
-          ctx.fillRect(mx - CW * 0.3, my - RH * 0.3, CW * 0.6, RH * 0.6);
-        } else if (pending) pend.push([sex, mx, my, hollow]);
+          ctx.fillStyle = linkPending ? C.pending : C.fg;
+          ctx.fillRect(mx - CW * 0.35, my - RH * 0.35, CW * 0.7, RH * 0.7);
+        } else if (linkPending) links.push([mx, my]);
         else shape(pick(sex, hollow), sex, mx, my, HALF);
       };
-      // rows are sorted; skip to the first visible one
-      for (const r of col.p) drawOne(r, false, !!q.people[r].p);
-      for (const c of col.c) drawOne(c.r, !!c.o, !!c.pd || !!q.people[c.r].p);
+      for (const r of col.p) drawOne(r, false, !!col.pd && !!q.people[r].p && false);
+      for (const c of col.c) drawOne(c.r, !!c.o, !!c.pd);
     }
-    if (!tiny) {
-      ctx.fillStyle = C.fg;
-      ctx.fill(male);
-      ctx.fill(female);
-      ctx.fill(other);
-      ctx.strokeStyle = C.fg;
-      ctx.lineWidth = lw(1.6);
-      ctx.stroke(hollowM);
-      ctx.stroke(hollowF);
-      ctx.stroke(hollowO);
-      // pending: amber hatch + dashed outline
-      for (const [sex, mx, my, hollow] of pend) {
-        const p = new Path2D();
-        shape(p, sex, mx, my, HALF);
-        ctx.save();
-        ctx.globalAlpha = 0.22;
-        ctx.fillStyle = C.pending;
-        ctx.fill(p);
-        ctx.globalAlpha = 1;
-        ctx.clip(p);
-        ctx.strokeStyle = C.pending;
-        ctx.lineWidth = lw(1.5);
-        ctx.beginPath();
-        for (let d = -HALF * 2; d < HALF * 2; d += 4) {
-          ctx.moveTo(mx + d, my + HALF);
-          ctx.lineTo(mx + d + HALF * 2, my - HALF);
-        }
-        ctx.stroke();
-        ctx.restore();
-        ctx.setLineDash([lw(3), lw(2)]);
-        ctx.lineWidth = lw(1.8);
-        ctx.strokeStyle = C.pending;
-        ctx.stroke(p);
-        ctx.setLineDash([]);
-        if (px >= 14) {
-          ctx.fillStyle = C.pending;
-          ctx.beginPath();
-          ctx.arc(mx + HALF, my - HALF, 3.2, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        void hollow;
-      }
+    if (tiny) return;
+    ctx.fillStyle = C.fg;
+    ctx.fill(male);
+    ctx.fill(female);
+    ctx.fill(other);
+    ctx.strokeStyle = C.fg;
+    ctx.lineWidth = lw(1.8);
+    ctx.stroke(hollowM);
+    ctx.stroke(hollowF);
+    ctx.stroke(hollowO);
+    // A link waiting for review: an amber circle with a slash (where the mark will appear once approved).
+    for (const [mx, my] of links) {
+      const r = HALF * 0.82;
+      ctx.beginPath();
+      ctx.arc(mx, my, r, 0, Math.PI * 2);
+      ctx.fillStyle = C.cell;
+      ctx.fill();
+      ctx.lineWidth = lw(2);
+      ctx.strokeStyle = C.pending;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(mx - r * 0.7, my + r * 0.7);
+      ctx.lineTo(mx + r * 0.7, my - r * 0.7);
+      ctx.stroke();
     }
   }
 
-  drawHeader(q, c0, c1, cx, px) {
+  /** The letter of each column sits in its own header cell, directly above the column's top member. */
+  drawHeaders(q, c0, c1, ry, cx, px) {
+    if (px < 9) return;
     const { ctx, colors: C } = this;
     const { x, y, k } = this.tf;
-    const top = y - HH * k; // screen y of the header band's top
-    const bandH = HH * k;
-    if (top > this.size.h || y < 0) return;
-    ctx.fillStyle = C.head;
-    ctx.fillRect(0, Math.max(0, top), this.size.w, Math.min(bandH, y - Math.max(0, top)));
-    if (px < 8) return;
-    const fs = Math.min(bandH * 0.7, 16);
-    ctx.font = `600 ${fs}px ${this.font()}`;
+    ctx.font = `700 ${Math.min(RH * k * 0.62, 16)}px ${this.font()}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = C.fg;
     for (let j = c0; j <= c1; j++) {
-      const col = q.cols[j];
       const sxm = x + (cx(j) + CW / 2) * k;
-      if (sxm < -20 || sxm > this.size.w + 20) continue;
-      const sel = this.selCols.get(j);
-      if (sel !== undefined) {
-        ctx.fillStyle = C.sel[sel];
-        ctx.globalAlpha = 0.5;
-        ctx.fillRect(x + cx(j) * k, top, px, bandH);
-        ctx.globalAlpha = 1;
-        ctx.fillStyle = C.fg;
-      }
-      const letter = col.h === 'none' ? '' : t(STATE_LETTER[col.h] || 'state.unknown');
-      if (letter) ctx.fillText(letter, sxm, top + bandH / 2);
+      const sym = y + (ry(q.colMin[j] - 1) + RH / 2) * k;
+      if (sxm < -20 || sxm > this.size.w + 20 || sym < -20 || sym > this.size.h + 20) continue;
+      ctx.fillText(t('state.' + (q.cols[j].h === 'none' ? 'none' : q.cols[j].h)), sxm, sym + 0.5);
     }
   }
 
@@ -590,46 +614,90 @@ export class QuiltView extends EventTarget {
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'right';
     ctx.font = `${fs}px ${this.font()}`;
-    const greek = fs < 8 || this.privacy;
+    const greek = fs < 8.5 || this.privacy;
     ctx.lineJoin = 'round';
     for (let i = r0; i <= r1; i++) {
       const p = q.people[i];
       const first = q.first[i] < 0 ? 0 : q.first[i];
-      const sx = x + cx(first) * k - 5;
-      const sy = y + (ry_(this, i) + RH / 2) * k;
+      const sx = x + cx(first) * k - 4;
+      const top = y + ry(i) * k;
+      const sy = top + (RH * k) / 2;
       if (sy < -fs || sy > this.size.h + fs || sx < -20) continue;
-      const text = q.label(i, this.labelMode);
+      const text = q.labelText(i, this.labelMode);
       if (greek) {
         ctx.fillStyle = C.muted;
         ctx.globalAlpha = 0.35;
-        const wBar = Math.min(text.length * fs * 0.55, 200);
+        const wBar = Math.min(text.length * fs * 0.55, 220);
         ctx.fillRect(sx - wBar, sy - fs * 0.3, wBar, fs * 0.6);
         ctx.globalAlpha = 1;
+        if (p.p && wBar > 2) {
+          ctx.strokeStyle = C.pending;
+          ctx.lineWidth = 1;
+          ctx.strokeRect(sx - wBar - 2, sy - fs * 0.45, wBar + 4, fs * 0.9);
+        }
         continue;
       }
-      const dead = !p.l || !!p.d;
+      const tw = ctx.measureText(text).width;
+      const dead = !!p.d; // a recorded death; unknown is not "deceased"
       if (dead) {
-        const wTxt = ctx.measureText(text).width;
         ctx.fillStyle = C.dead;
-        ctx.fillRect(sx - wTxt - 3, sy - fs * 0.62, wTxt + 6, fs * 1.24);
+        ctx.fillRect(sx - tw - 3, sy - fs * 0.62, tw + 6, fs * 1.24);
+      }
+      if (p.p) {
+        // waiting for review: an amber frame around the name and a hatched marker before it
+        const bx = sx - tw - 7;
+        const bh = Math.min(RH * k * 0.92, fs * 1.5);
+        ctx.fillStyle = C.pending;
+        ctx.globalAlpha = 0.14;
+        ctx.beginPath();
+        ctx.roundRect(bx, sy - bh / 2, tw + 12, bh, 4);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = C.pending;
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
+        const m = Math.min(RH * k * 0.78, fs * 1.2);
+        this.pendingMarker(bx - m - 3, sy - m / 2, m);
       }
       if (this.outlines) {
         ctx.lineWidth = 3;
-        ctx.strokeStyle = C.bg;
+        ctx.strokeStyle = C.cell;
         ctx.strokeText(text, sx, sy);
       }
       ctx.fillStyle = C.fg;
       ctx.fillText(text, sx, sy);
-      if (p.p) {
-        ctx.fillStyle = C.pending;
-        ctx.beginPath();
-        ctx.arc(sx - ctx.measureText(text).width - fs * 0.5, sy, Math.max(2.5, fs * 0.2), 0, Math.PI * 2);
-        ctx.fill();
-      }
+      // the name is underlined by the row's own line, which continues from the text to the first cell
+      ctx.strokeStyle = C.line;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(sx - tw - 4, top + RH * k);
+      ctx.lineTo(sx + 4, top + RH * k);
+      ctx.stroke();
     }
   }
-}
 
-function ry_(v, i) {
-  return v.anim ? v.anim.rowY[i] : i * RH;
+  /** The small hatched amber square that marks something waiting for review. */
+  pendingMarker(x, y, s) {
+    const { ctx, colors: C } = this;
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(x, y, s, s, 2);
+    ctx.fillStyle = C.cell;
+    ctx.fill();
+    ctx.clip();
+    ctx.strokeStyle = C.pending;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    for (let d = -s; d < s * 2; d += 4) {
+      ctx.moveTo(x + d, y + s);
+      ctx.lineTo(x + d + s, y);
+    }
+    ctx.stroke();
+    ctx.restore();
+    ctx.beginPath();
+    ctx.roundRect(x, y, s, s, 2);
+    ctx.strokeStyle = C.pending;
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+  }
 }

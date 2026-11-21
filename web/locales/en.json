@@ -246,5 +246,10 @@
   "sex.male": "Male",
   "sex.female": "Female",
   "sex.other": "Other",
-  "sex.unknown": "Unknown"
+  "sex.unknown": "Unknown",
+  "state.none": "P",
+  "state.none.long": "No partnership recorded",
+  "legend.blood": "blood",
+  "legend.not_blood": "not blood",
+  "legend.waiting": "waiting for review"
 }

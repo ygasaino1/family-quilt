@@ -90,7 +90,7 @@ try {
       const r = q.people.findIndex((p) => p.n.startsWith(nm));
       const j = q.first[r];
       const rect = v.canvas.getBoundingClientRect();
-      return { r, j, x: rect.left + v.tf.x + (j * 26 + 13) * v.tf.k, y: rect.top + v.tf.y + (r * 24 + 12) * v.tf.k, lx: rect.left + v.tf.x + (j * 26 - 40) * v.tf.k };
+      return { r, j, x: rect.left + v.tf.x + (j * 20 + 10) * v.tf.k, y: rect.top + v.tf.y + (r * 20 + 10) * v.tf.k };
     }, name);
   const pixel = (x, y) =>
     page.evaluate(([x, y]) => {
@@ -106,11 +106,11 @@ try {
     const bobAt = await where('Bob');
     assert.ok(dark(await pixel(bobAt.x, bobAt.y)), 'man cell centre is filled');
     // Corner of the square is filled for a man; the corner of a circle is empty.
-    const cornerM = await pixel(bobAt.x + 8 * 1.5, bobAt.y + 8 * 1.5);
+    const cornerM = await pixel(bobAt.x + 7.5 * 1.5, bobAt.y + 7.5 * 1.5);
     assert.ok(dark(cornerM), 'square has its corner');
     const annaAt = await where('Anna');
     assert.ok(dark(await pixel(annaAt.x, annaAt.y)), 'woman cell centre is filled');
-    assert.ok(!dark(await pixel(annaAt.x + 8 * 1.5, annaAt.y + 8 * 1.5)), 'circle has no corner');
+    assert.ok(!dark(await pixel(annaAt.x + 7.5 * 1.5, annaAt.y + 7.5 * 1.5)), 'circle has no corner');
   });
 
   await check('symbols: non-birth child is hollow (outlined)', async () => {
@@ -121,11 +121,13 @@ try {
       const j = q.first[r];
       const c = q.cols[j].c.find((x) => x.r === r);
       const rect = v.canvas.getBoundingClientRect();
-      return { outlined: !!c.o, x: rect.left + v.tf.x + (j * 26 + 13) * v.tf.k, y: rect.top + v.tf.y + (r * 24 + 12) * v.tf.k };
+      return { outlined: !!c.o, x: rect.left + v.tf.x + (j * 20 + 10) * v.tf.k, y: rect.top + v.tf.y + (r * 20 + 10) * v.tf.k };
     });
     assert.equal(deeCell.outlined, true);
     assert.ok(light(await pixel(deeCell.x, deeCell.y)), 'hollow centre shows the background');
-    assert.ok(dark(await pixel(deeCell.x + 8.5 * 1.5, deeCell.y)), 'hollow has its outline');
+    let ring = false;
+    for (const dx of [-2, -1, 0, 1, 2]) ring = ring || dark(await pixel(deeCell.x + 8.4 * 1.5 + dx, deeCell.y));
+    assert.ok(ring, 'hollow has its outline');
   });
 
   await check('header letter M for the married family', async () => {
@@ -211,8 +213,9 @@ try {
     const z = await where('Zoe');
     const flagged = await page.evaluate(() => window.__app.view.q.people.find((p) => p.n.startsWith('Zoe')).p);
     assert.equal(flagged, 1);
-    const px = await pixel(z.x + 8.5 * 1.5, z.y);
-    assert.ok(px[0] > px[2] + 40, `dashed amber outline expected, got ${px}`);
+    // the link to Zoe is waiting for review: an amber ring with a slash instead of her mark
+    const px = await pixel(z.x + 6.9 * 1.5, z.y);
+    assert.ok(px[0] > px[2] + 40, `amber ring expected, got ${px}`);
     await page.screenshot({ path: path.join(out, 'light-pending.png') });
   });
 

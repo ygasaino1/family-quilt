@@ -99,6 +99,12 @@ export class Quilt {
     return out;
   }
 
+  /** The row text: a sex sign (as in the original quilt) and the name. */
+  labelText(i, mode) {
+    const sign = { M: '\u2642', F: '\u2640', X: '\u26A5' }[this.people[i].s];
+    return (sign ? sign + ' ' : '') + this.label(i, mode);
+  }
+
   /** Surname = last word, given = the rest. (The data has one display name; see docs/decisions.md.) */
   label(i, mode) {
     const name = this.people[i].n || '';

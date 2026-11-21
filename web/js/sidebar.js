@@ -30,7 +30,7 @@ export function openPerson(id) {
   const v = app.view;
   const r = v.q.idRow.get(id);
   v.setSelection([{ kind: 'row', ids: [id] }]);
-  if (r !== undefined) v.centerOn(Math.max(0, v.q.first[r]) * 26 + 13, r * 24 + 12, true);
+  if (r !== undefined) v.centerOnRow(r, true);
 }
 
 async function render(sel) {
