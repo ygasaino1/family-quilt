@@ -1,5 +1,5 @@
 // Overview of the whole quilt with the current viewport; click or drag to move there.
-import { CW, RH } from './view.js';
+import { CW, RH } from './geometry.js';
 
 export class Minimap {
   constructor(canvas, view) {
@@ -12,10 +12,10 @@ export class Minimap {
     view.addEventListener('view', () => this.draw());
     const at = (e) => {
       const r = canvas.getBoundingClientRect();
-      const q = view.q;
-      if (!q) return;
-      const wx = ((e.clientX - r.left) / r.width) * q.m * CW;
-      const wy = ((e.clientY - r.top) / r.height) * q.n * RH;
+      const g = view.geo;
+      if (!g) return;
+      const wx = ((e.clientX - r.left) / r.width) * g.width;
+      const wy = ((e.clientY - r.top) / r.height) * g.height;
       view.centerOn(wx, wy, false);
     };
     canvas.addEventListener('pointerdown', (e) => {
@@ -39,16 +39,17 @@ export class Minimap {
     const C = this.view.colors;
     g.fillStyle = C.bg;
     g.fillRect(0, 0, W, H);
-    if (q && q.n) {
-      const sx = W / (q.m * CW);
-      const sy = H / (q.n * RH);
+    const geo = this.view.geo;
+    if (q && q.n && geo) {
+      const sx = W / geo.width;
+      const sy = H / geo.height;
       g.fillStyle = C.fg;
       const w = Math.max(1, CW * sx * 0.6);
       const h = Math.max(1, RH * sy * 0.6);
       for (let j = 0; j < q.m; j++) {
         const col = q.cols[j];
-        for (const r of col.p) g.fillRect(j * CW * sx, r * RH * sy, w, h);
-        for (const c of col.c) g.fillRect(j * CW * sx, c.r * RH * sy, w, h);
+        for (const r of col.p) g.fillRect(geo.cx[j] * sx, geo.ry[r] * sy, w, h);
+        for (const c of col.c) g.fillRect(geo.cx[j] * sx, geo.ry[c.r] * sy, w, h);
       }
     }
     this.draw();
@@ -59,10 +60,11 @@ export class Minimap {
     const { ctx, canvas } = this;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(this.off, 0, 0);
-    if (!q || !q.n) return;
+    const geo = this.view.geo;
+    if (!q || !q.n || !geo) return;
     const v = this.view.visible();
-    const sx = canvas.width / (q.m * CW);
-    const sy = canvas.height / (q.n * RH);
+    const sx = canvas.width / geo.width;
+    const sy = canvas.height / geo.height;
     const x0 = Math.max(0, v.x0 * sx);
     const y0 = Math.max(0, v.y0 * sy);
     const x1 = Math.min(canvas.width, v.x1 * sx);

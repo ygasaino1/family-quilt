@@ -19,6 +19,7 @@ const ASSETS: &[(&str, &[u8])] = &[
     asset!("js/api.js"),
     asset!("js/quilt.js"),
     asset!("js/view.js"),
+    asset!("js/geometry.js"),
     asset!("js/dom.js"),
     asset!("js/prefs.js"),
     asset!("js/minimap.js"),

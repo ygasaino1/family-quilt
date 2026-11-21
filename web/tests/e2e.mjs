@@ -89,8 +89,9 @@ try {
       const q = v.q;
       const r = q.people.findIndex((p) => p.n.startsWith(nm));
       const j = q.first[r];
+      const g = v.geo;
       const rect = v.canvas.getBoundingClientRect();
-      return { r, j, x: rect.left + v.tf.x + (j * 20 + 10) * v.tf.k, y: rect.top + v.tf.y + (r * 20 + 10) * v.tf.k };
+      return { r, j, x: rect.left + v.tf.x + (g.cx[j] + 10) * v.tf.k, y: rect.top + v.tf.y + (g.ry[r] + 10) * v.tf.k };
     }, name);
   const pixel = (x, y) =>
     page.evaluate(([x, y]) => {
@@ -106,11 +107,11 @@ try {
     const bobAt = await where('Bob');
     assert.ok(dark(await pixel(bobAt.x, bobAt.y)), 'man cell centre is filled');
     // Corner of the square is filled for a man; the corner of a circle is empty.
-    const cornerM = await pixel(bobAt.x + 7.5 * 1.5, bobAt.y + 7.5 * 1.5);
-    assert.ok(dark(cornerM), 'square has its corner');
+    const cornerM = await pixel(bobAt.x + 6 * 1.5, bobAt.y + 6 * 1.5);
+    assert.ok(dark(cornerM), 'square has its corner ' + JSON.stringify({ cornerM, bobAt, tf: await page.evaluate(() => window.__app.view.tf) }));
     const annaAt = await where('Anna');
     assert.ok(dark(await pixel(annaAt.x, annaAt.y)), 'woman cell centre is filled');
-    assert.ok(!dark(await pixel(annaAt.x + 7.5 * 1.5, annaAt.y + 7.5 * 1.5)), 'circle has no corner');
+    assert.ok(!dark(await pixel(annaAt.x + 6.5 * 1.5, annaAt.y + 6.5 * 1.5)), 'circle has no corner');
   });
 
   await check('symbols: non-birth child is hollow (outlined)', async () => {
@@ -120,13 +121,14 @@ try {
       const r = q.people.findIndex((p) => p.n.startsWith('Dee'));
       const j = q.first[r];
       const c = q.cols[j].c.find((x) => x.r === r);
+      const g = v.geo;
       const rect = v.canvas.getBoundingClientRect();
-      return { outlined: !!c.o, x: rect.left + v.tf.x + (j * 20 + 10) * v.tf.k, y: rect.top + v.tf.y + (r * 20 + 10) * v.tf.k };
+      return { outlined: !!c.o, x: rect.left + v.tf.x + (g.cx[j] + 10) * v.tf.k, y: rect.top + v.tf.y + (g.ry[r] + 10) * v.tf.k };
     });
     assert.equal(deeCell.outlined, true);
     assert.ok(light(await pixel(deeCell.x, deeCell.y)), 'hollow centre shows the background');
     let ring = false;
-    for (const dx of [-2, -1, 0, 1, 2]) ring = ring || dark(await pixel(deeCell.x + 8.4 * 1.5 + dx, deeCell.y));
+    for (const dx of [-2, -1, 0, 1, 2]) ring = ring || dark(await pixel(deeCell.x + 7.6 * 1.5 + dx, deeCell.y));
     assert.ok(ring, 'hollow has its outline');
   });
 
@@ -134,6 +136,30 @@ try {
     const letter = await page.evaluate(() => window.__app.view.q.cols.map((c) => c.h));
     assert.ok(letter.includes('married'));
     await page.screenshot({ path: path.join(out, 'light-quilt.png') });
+  });
+
+  await check('geometry follows the original: staircase, names between column groups, header between parents and children', async () => {
+    const bad = await page.evaluate(() => {
+      const v = window.__app.view;
+      const q = v.q;
+      const g = v.geo;
+      const out = [];
+      q.cols.forEach((col, j) => {
+        for (const r of col.p) {
+          if (!(g.chy[j] >= g.ry[r] + 20)) out.push(`header of column ${j} is not below parent row ${r}`);
+          if (!(g.cx[j] >= g.rnx[r] + g.lo[r] + g.tw[r])) out.push(`column ${j} is not right of the name of parent ${r}`);
+        }
+        for (const c of col.c) {
+          if (!(g.chy[j] + 20 <= g.ry[c.r])) out.push(`header of column ${j} is not above child row ${c.r}`);
+          if (!(g.cx[j] + 20 <= g.rnx[c.r])) out.push(`column ${j} is not left of the name of child ${c.r}`);
+        }
+      });
+      // rows and columns are sorted by position (the renderer bisects on them)
+      for (let i = 1; i < q.n; i++) if (!(g.ry[i] > g.ry[i - 1])) out.push('rows not ascending at ' + i);
+      for (let j = 1; j < q.m; j++) if (!(g.cx[j] > g.cx[j - 1])) out.push('columns not ascending at ' + j);
+      return out;
+    });
+    assert.deepEqual(bad, []);
   });
 
   await check('selecting a person does not move the view; sidebar opens', async () => {
@@ -216,7 +242,7 @@ try {
     const flagged = await page.evaluate(() => window.__app.view.q.people.find((p) => p.n.startsWith('Zoe')).p);
     assert.equal(flagged, 1);
     // the link to Zoe is waiting for review: an amber ring with a slash instead of her mark
-    const px = await pixel(z.x + 6.9 * 1.5, z.y);
+    const px = await pixel(z.x + 6.2 * 1.5, z.y);
     assert.ok(px[0] > px[2] + 40, `amber ring expected, got ${px}`);
     await page.screenshot({ path: path.join(out, 'light-pending.png') });
   });

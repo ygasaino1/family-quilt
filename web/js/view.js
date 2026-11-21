@@ -1,13 +1,11 @@
 // Canvas 2D quilt renderer and its interaction (pan, zoom, selection).
-// World units: one column is CW wide, one row is RH tall; the header band sits above row 0.
+// The geometry (staircase of row blocks and column blocks, like the original GeneaQuilts) is in geometry.js.
 import { t } from './i18n.js';
+import { CW, RH, HH, WORLD_FONT, buildGeometry, floorIndex, blank, blend, mappedFrom } from './geometry.js';
 
-export const CW = 20;
-export const RH = 20;
-export const HH = 20; // the header cell is one row high
-export const LABEL_W = 210;
-const HALF = 8.4; // half the size of a cell shape: shapes nearly fill their cell
-const MIN_K = 0.01;
+export { CW, RH, HH };
+const HALF = 7.6; // half the size of a mark: marks nearly fill the crossing of a row and a column
+const MIN_K = 0.002;
 const MAX_K = 8;
 
 const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -25,7 +23,9 @@ export class QuiltView extends EventTarget {
     this.sel = []; // [{kind:'row'|'col', ids:[personId], colKey?, colour}]
     this.hl = 'all'; // all | none | ancestors | descendants
     this.blood = true;
-    this.labelMode = 'full';
+    this._labelMode = 'full';
+    this.geo = null; // where everything sits (geometry.js)
+    this.mctx = document.createElement('canvas').getContext('2d');
     this.outlines = true;
     this.privacy = false;
     this.matches = new Set(); // rows matching the search
@@ -75,15 +75,43 @@ export class QuiltView extends EventTarget {
     this.emitView();
   }
 
+  get labelMode() {
+    return this._labelMode;
+  }
+
+  /** A different label changes the width of the name slots, so the geometry is rebuilt. */
+  set labelMode(v) {
+    if (v === this._labelMode) return;
+    this._labelMode = v;
+    if (this.q && this.q.n) {
+      this.geo = this.makeGeo(this.q);
+      this.anim = null;
+      this.dirty = true;
+      this.emitView();
+      this.dispatchEvent(new CustomEvent('quilt'));
+    }
+  }
+
+  /** The geometry being drawn: the real one, or the blend while the layout glides. */
+  get g() {
+    return this.anim ? this.anim.cur : this.geo;
+  }
+
+  makeGeo(q) {
+    this.mctx.font = `${WORLD_FONT}px ${this.font()}`;
+    return buildGeometry(q, (s) => this.mctx.measureText(s).width, this._labelMode);
+  }
+
   setQuilt(q, { glide = false, fit = false } = {}) {
     const old = this.q;
+    const oldGeo = this.geo;
     this.q = q;
-    if (glide && old && !reduced() && old.n && q.n) {
-      const rowFrom = new Float64Array(q.n);
-      const colFrom = new Float64Array(q.m);
-      for (let i = 0; i < q.n; i++) rowFrom[i] = (old.idRow.get(q.people[i].id) ?? i) * RH;
-      for (let j = 0; j < q.m; j++) colFrom[j] = (old.colIndexByKey.get(q.cols[j].k) ?? j) * CW;
-      this.anim = { rowFrom, colFrom, rowY: new Float64Array(q.n), colX: new Float64Array(q.m), t0: performance.now(), dur: 500 };
+    this.geo = q && q.n ? this.makeGeo(q) : null;
+    if (glide && old && oldGeo && this.geo && !reduced() && old.n && q.n) {
+      const from = mappedFrom(old, oldGeo, q, this.geo);
+      const cur = blank(this.geo);
+      blend(cur, from, this.geo, 0);
+      this.anim = { from, to: this.geo, cur, t0: performance.now(), dur: 500, p: 0 };
     } else {
       this.anim = null;
     }
@@ -96,8 +124,8 @@ export class QuiltView extends EventTarget {
 
   // ---------- view transform ----------
   bounds() {
-    const q = this.q;
-    return { x0: -LABEL_W, y0: -HH - 6, x1: Math.max(1, q ? q.m : 1) * CW + 20, y1: Math.max(1, q ? q.n : 1) * RH + 20 };
+    const g = this.geo;
+    return { x0: -20, y0: -20, x1: (g ? g.width : 100) + 20, y1: (g ? g.height : 100) + 20 };
   }
 
   fit(animate = true) {
@@ -141,13 +169,11 @@ export class QuiltView extends EventTarget {
     this.moveTo({ k: this.tf.k, x: w / 2 - wx * this.tf.k, y: h / 2 - wy * this.tf.k }, animate);
   }
 
+  /** Centre on a person's name. */
   centerOnRow(r, animate = true) {
-    const q = this.q;
-    this.centerOn(Math.max(0, q.first[r]) * CW + CW / 2, r * RH + RH / 2, animate);
-  }
-
-  rowCenterY(i) {
-    return this.anim ? this.anim.rowY[i] + RH / 2 : i * RH + RH / 2;
+    const g = this.geo;
+    if (!g) return;
+    this.centerOn(g.rnx[r] + Math.min(120, g.lo[r] + g.tw[r] / 2), g.ry[r] + RH / 2, animate);
   }
 
   /** World rectangle currently visible. */
@@ -286,51 +312,42 @@ export class QuiltView extends EventTarget {
     keys[e.key]();
   }
 
-  /** What is under screen point (sx, sy)? */
+  /** What is under screen point (sx, sy)? During the glide, pick what is drawn, not where it is going. */
   hitTest(sx, sy) {
     const q = this.q;
-    if (!q) return null;
+    const g = this.g;
+    if (!q || !g) return null;
     const { x, y, k } = this.tf;
     const wx = (sx - x) / k;
     const wy = (sy - y) / k;
-    const a = this.anim; // during the glide, pick what is drawn, not where it is going
-    if (!a) {
-      // The header cell of column j sits in the row above its top member.
-      const j0 = Math.floor(wx / CW);
-      if (j0 >= 0 && j0 < q.m && Math.floor(wy / RH) === q.colMin[j0] - 1) return { type: 'col', col: j0 };
+    let r = -1;
+    let j = -1;
+    if (this.anim) {
+      for (let i = 0; i < q.n; i++) if (wy >= g.ry[i] && wy < g.ry[i] + RH) { r = i; break; }
+      for (let c = 0; c < q.m; c++) if (wx >= g.cx[c] && wx < g.cx[c] + CW) { j = c; break; }
+    } else {
+      r = floorIndex(g.ry, wy);
+      if (r >= 0 && wy >= g.ry[r] + RH) r = -1;
+      j = floorIndex(g.cx, wx);
+      if (j >= 0 && wx >= g.cx[j] + CW) j = -1;
+      if (j >= 0 && wy >= g.chy[j] && wy < g.chy[j] + HH) return { type: 'col', col: j };
     }
-    let r = Math.floor(wy / RH);
-    let j = Math.floor(wx / CW);
-    if (a) {
-      r = -1;
-      j = -1;
-      for (let i = 0; i < q.n; i++) if (wy >= a.rowY[i] && wy < a.rowY[i] + RH) { r = i; break; }
-      for (let c = 0; c < q.m; c++) if (wx >= a.colX[c] && wx < a.colX[c] + CW) { j = c; break; }
-    }
-    if (r < 0 || r >= q.n) return null;
-    if (j >= 0 && j < q.m) {
+    if (r >= 0 && j >= 0) {
       const cell = q.cellAt(j, r);
       if (cell) return { type: 'cell', row: r, col: j, ...cell };
     }
-    if (a) return null;
-    const first = q.first[r] < 0 ? 0 : q.first[r];
-    const right = first * CW;
-    const fs = this.fontSize();
-    if (fs >= 6 && wx <= right && wx >= right - this.labelWidth(r, fs) / k - 6) return { type: 'label', row: r };
+    if (this.anim || r < 0 || this.fontSize() < 6) return null;
+    if (wx >= g.rnx[r] && wx <= g.rnx[r] + g.lo[r] + g.tw[r]) return { type: 'label', row: r };
     return null;
-  }
-
-  labelWidth(r, fs) {
-    this.ctx.font = `${fs}px ${this.font()}`;
-    return this.ctx.measureText(this.q.labelText(r, this.labelMode)).width + 8;
   }
 
   font() {
     return 'system-ui, "Segoe UI", sans-serif';
   }
 
+  /** Names are drawn at a fixed size in world units, so on screen they scale with the zoom. */
   fontSize() {
-    return Math.min(RH * this.tf.k * 0.8, 22);
+    return WORLD_FONT * this.tf.k;
   }
 
   hoverAt(e) {
@@ -374,20 +391,16 @@ export class QuiltView extends EventTarget {
       const p = clamp((now - this.tween.t0) / this.tween.dur, 0, 1);
       const e = ease(p);
       const { from, to } = this.tween;
-      // Interpolate zoom geometrically so the motion feels even.
-      const k = from.k * Math.pow(to.k / from.k, e);
-      this.tf = { k, x: from.x + (to.x - from.x) * e, y: from.y + (to.y - from.y) * e };
+      this.tf = { k: from.k + (to.k - from.k) * e, x: from.x + (to.x - from.x) * e, y: from.y + (to.y - from.y) * e };
       if (p >= 1) this.tween = null;
       this.dirty = true;
       this.emitView();
     }
     if (this.anim) {
-      const p = clamp((now - this.anim.t0) / this.anim.dur, 0, 1);
-      const e = ease(p);
-      const q = this.q;
-      for (let i = 0; i < q.n; i++) this.anim.rowY[i] = this.anim.rowFrom[i] + (i * RH - this.anim.rowFrom[i]) * e;
-      for (let j = 0; j < q.m; j++) this.anim.colX[j] = this.anim.colFrom[j] + (j * CW - this.anim.colFrom[j]) * e;
-      if (p >= 1) this.anim = null;
+      const a = this.anim;
+      a.p = clamp((now - a.t0) / a.dur, 0, 1);
+      blend(a.cur, a.from, a.to, ease(a.p));
+      if (a.p >= 1) this.anim = null;
       this.dirty = true;
     }
     if (this.dirty) {
@@ -405,124 +418,118 @@ export class QuiltView extends EventTarget {
     ctx.fillStyle = C.bg;
     ctx.fillRect(0, 0, w, h);
     const q = this.q;
-    if (!q || !q.n) return;
+    const g = this.g;
+    if (!q || !q.n || !g) return;
     const { x, y, k } = this.tf;
     const vis = this.visible();
-    const anim = this.anim;
-    const ry = anim ? (i) => (i < 0 ? i * RH : anim.rowY[i]) : (i) => i * RH;
-    const cx = anim ? (j) => anim.colX[j] : (j) => j * CW;
-    const r0 = anim ? 0 : clamp(Math.floor(vis.y0 / RH) - 1, 0, q.n - 1);
-    const r1 = anim ? q.n - 1 : clamp(Math.ceil(vis.y1 / RH) + 1, 0, q.n - 1);
-    const c0 = anim || !q.m ? 0 : clamp(Math.floor(vis.x0 / CW) - 1, 0, q.m - 1);
-    const c1 = anim ? q.m - 1 : q.m ? clamp(Math.ceil(vis.x1 / CW) + 1, 0, q.m - 1) : -1;
-    const px = CW * k; // on-screen size of one cell
-    const detail = px >= 5;
+    let r0 = 0;
+    let r1 = q.n - 1;
+    let c0 = 0;
+    let c1 = q.m - 1;
+    if (!this.anim) {
+      // rows and columns are sorted by position, so the visible ones are found by bisection
+      r0 = Math.max(0, floorIndex(g.ry, vis.y0 - RH));
+      r1 = floorIndex(g.ry, vis.y1);
+      c0 = Math.max(0, floorIndex(g.cx, vis.x0 - CW));
+      c1 = floorIndex(g.cx, vis.x1);
+    }
+    const px = CW * k; // on-screen width of one column
     const lw = (n) => n / k; // n screen pixels, in world units
+    const inX = (a, b) => b >= vis.x0 && a <= vis.x1;
+    const inY = (a, b) => b >= vis.y0 && a <= vis.y1;
 
     ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * x, dpr * y);
-    // 1. the strips: a row strip from a person's first to last family, a column strip from the header to the last member
+    // 1. the strips: a row strip spans a person's name and marks, a column strip its header and marks
     ctx.fillStyle = C.cell;
-    for (let i = r0; i <= r1; i++) {
-      const a = q.first[i];
-      if (a >= 0) ctx.fillRect(cx(a), ry(i), cx(q.last[i]) + CW - cx(a), RH);
-    }
-    for (let j = c0; j <= c1; j++) {
-      const top = ry(q.colMin[j] - 1);
-      ctx.fillRect(cx(j), top, CW, ry(q.colMax[j]) + RH - top);
-    }
+    for (let i = r0; i <= r1; i++) if (inX(g.rx0[i], g.rx1[i])) ctx.fillRect(g.rx0[i], g.ry[i], g.rx1[i] - g.rx0[i], RH);
+    for (let j = c0; j <= c1; j++) if (inY(g.cy0[j], g.cy1[j])) ctx.fillRect(g.cx[j], g.cy0[j], CW, g.cy1[j] - g.cy0[j]);
 
     // 2. selection bands over the strips
-    const band = (colour, a, x0, y0, x1, y1) => {
+    const band = (colour, a, x0, y0, wd, ht) => {
       ctx.globalAlpha = a;
       ctx.fillStyle = C.sel[colour];
-      ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+      ctx.fillRect(x0, y0, wd, ht);
     };
     for (let i = r0; i <= r1; i++) {
       const s = this.selRows.get(i);
       const rel = s === undefined ? this.relRows.get(i) : undefined;
-      if (s !== undefined) band(s, 0.34, vis.x0, ry(i), vis.x1, ry(i) + RH);
-      else if (rel !== undefined) band(rel, 0.16, vis.x0, ry(i), vis.x1, ry(i) + RH);
+      const wd = g.rx1[i] - g.rx0[i];
+      if (s !== undefined) band(s, 0.34, g.rx0[i], g.ry[i], wd, RH);
+      else if (rel !== undefined) band(rel, 0.16, g.rx0[i], g.ry[i], wd, RH);
       if (this.matches.has(i)) {
         ctx.globalAlpha = 1;
         ctx.strokeStyle = C.match;
         ctx.lineWidth = lw(2);
-        ctx.strokeRect(vis.x0, ry(i) + 1, vis.x1 - vis.x0, RH - 2);
+        ctx.strokeRect(g.rx0[i], g.ry[i] + 1, wd, RH - 2);
       }
     }
-    for (const [j, colour] of this.selCols) if (j >= c0 && j <= c1) band(colour, 0.34, cx(j), vis.y0, cx(j) + CW, vis.y1);
+    for (const [j, colour] of this.selCols) if (j >= c0 && j <= c1) band(colour, 0.34, g.cx[j], g.cy0[j], CW, g.cy1[j] - g.cy0[j]);
     ctx.globalAlpha = 1;
 
-    // 3. cell borders: every cell of a strip is boxed, like the original quilt
+    // 3. the grid: one line between consecutive rows and one between consecutive columns, each as long as
+    //    the union of its two neighbours (this is all the original draws; the "cells" are line crossings)
     ctx.strokeStyle = C.line;
-    ctx.lineWidth = Math.max(lw(1), 0.4);
+    ctx.lineWidth = Math.max(lw(1), 0.3);
+    ctx.globalAlpha = px < 3 ? 0.55 : 1;
     ctx.beginPath();
-    if (px < 3) {
-      ctx.globalAlpha = 0.75;
-      for (let i = r0; i <= r1; i++) {
-        const a = q.first[i];
-        if (a >= 0 && a !== q.last[i]) {
-          ctx.moveTo(cx(a) + CW / 2, ry(i) + RH / 2);
-          ctx.lineTo(cx(q.last[i]) + CW / 2, ry(i) + RH / 2);
-        }
+    for (let i = r0; i <= r1; i++) {
+      let xa = g.rx0[i];
+      let xb = g.rx1[i];
+      if (i > g.rrunA[i]) {
+        xa = Math.min(xa, g.rx0[i - 1]);
+        xb = Math.max(xb, g.rx1[i - 1]);
       }
-      for (let j = c0; j <= c1; j++) {
-        ctx.moveTo(cx(j) + CW / 2, ry(q.colMin[j]) + RH / 2);
-        ctx.lineTo(cx(j) + CW / 2, ry(q.colMax[j]) + RH / 2);
+      if (inX(xa, xb)) {
+        ctx.moveTo(xa, g.ry[i]);
+        ctx.lineTo(xb, g.ry[i]);
       }
-    } else {
-      for (let i = r0; i <= r1; i++) {
-        const a = q.first[i];
-        if (a < 0) continue;
-        const b = q.last[i];
-        const yt = ry(i);
-        const xl = cx(a);
-        const xr = cx(b) + CW;
-        ctx.moveTo(xl, yt);
-        ctx.lineTo(xr, yt);
-        ctx.moveTo(xl, yt + RH);
-        ctx.lineTo(xr, yt + RH);
-        ctx.moveTo(xl, yt);
-        ctx.lineTo(xl, yt + RH);
-        ctx.moveTo(xr, yt);
-        ctx.lineTo(xr, yt + RH);
-        if (detail) for (let j = Math.max(a + 1, c0); j <= Math.min(b, c1); j++) {
-          ctx.moveTo(cx(j), yt);
-          ctx.lineTo(cx(j), yt + RH);
-        }
+      if (i === g.rrunB[i] && inX(g.rx0[i], g.rx1[i])) {
+        ctx.moveTo(g.rx0[i], g.ry[i] + RH);
+        ctx.lineTo(g.rx1[i], g.ry[i] + RH);
       }
-      for (let j = c0; j <= c1; j++) {
-        const xl = cx(j);
-        const top = ry(q.colMin[j] - 1);
-        const bottom = ry(q.colMax[j]) + RH;
-        ctx.moveTo(xl, top);
-        ctx.lineTo(xl, bottom);
-        ctx.moveTo(xl + CW, top);
-        ctx.lineTo(xl + CW, bottom);
-        ctx.moveTo(xl, top);
-        ctx.lineTo(xl + CW, top);
-        ctx.moveTo(xl, ry(q.colMin[j]));
-        ctx.lineTo(xl + CW, ry(q.colMin[j]));
-        ctx.moveTo(xl, bottom);
-        ctx.lineTo(xl + CW, bottom);
-        if (detail) for (let i = Math.max(q.colMin[j], r0); i <= Math.min(q.colMax[j], r1); i++) {
-          ctx.moveTo(xl, ry(i) + RH);
-          ctx.lineTo(xl + CW, ry(i) + RH);
-        }
+    }
+    for (let j = c0; j <= c1; j++) {
+      let ya = g.cy0[j];
+      let yb = g.cy1[j];
+      if (j > g.crunA[j]) {
+        ya = Math.min(ya, g.cy0[j - 1]);
+        yb = Math.max(yb, g.cy1[j - 1]);
+      }
+      if (inY(ya, yb)) {
+        ctx.moveTo(g.cx[j], ya);
+        ctx.lineTo(g.cx[j], yb);
+      }
+      if (j === g.crunB[j] && inY(g.cy0[j], g.cy1[j])) {
+        ctx.moveTo(g.cx[j] + CW, g.cy0[j]);
+        ctx.lineTo(g.cx[j] + CW, g.cy1[j]);
       }
     }
     ctx.stroke();
     ctx.globalAlpha = 1;
 
-    // 4. marks
-    if (px >= 1.2) this.drawCells(q, c0, c1, r0, r1, ry, cx, px, lw);
+    // 4. header cells (between the parent rows above and the child rows below), then the marks
+    if (px >= 1.2) this.drawHeaderBoxes(q, g, c0, c1, vis, lw);
+    if (px >= 1.2) this.drawCells(q, g, c0, c1, r0, r1, px);
 
     // 5. text, in screen space
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    this.drawHeaders(q, c0, c1, ry, cx, px);
-    this.drawLabels(q, r0, r1, ry, cx);
+    this.drawHeaders(q, g, c0, c1, px);
+    this.drawLabels(q, g, r0, r1);
   }
 
-  drawCells(q, c0, c1, r0, r1, ry, cx, px, lw) {
+  drawHeaderBoxes(q, g, c0, c1, vis, lw) {
+    const { ctx, colors: C } = this;
+    ctx.fillStyle = C.cell;
+    ctx.strokeStyle = C.line;
+    ctx.lineWidth = Math.max(lw(1), 0.3);
+    for (let j = c0; j <= c1; j++) {
+      if (g.chy[j] > vis.y1 || g.chy[j] + HH < vis.y0) continue;
+      ctx.fillRect(g.cx[j], g.chy[j], CW, HH);
+      ctx.strokeRect(g.cx[j], g.chy[j], CW, HH);
+    }
+  }
+
+  drawCells(q, g, c0, c1, r0, r1, px) {
     const { ctx, colors: C } = this;
     const tiny = px < 4;
     const male = new Path2D();
@@ -531,7 +538,7 @@ export class QuiltView extends EventTarget {
     const hollowM = new Path2D();
     const hollowF = new Path2D();
     const hollowO = new Path2D();
-    const links = []; // cells of a link that is waiting for review
+    const links = []; // marks of a link that is waiting for review
     const shape = (path, sex, mx, my, hs) => {
       if (sex === 'M') path.rect(mx - hs, my - hs, hs * 2, hs * 2);
       else if (sex === 'F') {
@@ -548,21 +555,22 @@ export class QuiltView extends EventTarget {
     const pick = (sex, hollow) => (sex === 'M' ? (hollow ? hollowM : male) : sex === 'F' ? (hollow ? hollowF : female) : hollow ? hollowO : other);
     for (let j = c0; j <= c1; j++) {
       const col = q.cols[j];
-      const mx = cx(j) + CW / 2;
+      const mx = g.cx[j] + CW / 2;
       const drawOne = (r, hollow, linkPending) => {
         if (r < r0 || r > r1) return;
         const sex = q.people[r].s;
-        const my = ry(r) + RH / 2;
+        const my = g.ry[r] + RH / 2;
         if (tiny) {
           ctx.fillStyle = linkPending ? C.pending : C.fg;
           ctx.fillRect(mx - CW * 0.35, my - RH * 0.35, CW * 0.7, RH * 0.7);
         } else if (linkPending) links.push([mx, my]);
         else shape(pick(sex, hollow), sex, mx, my, HALF);
       };
-      for (const r of col.p) drawOne(r, false, !!col.pd && !!q.people[r].p && false);
+      for (const r of col.p) drawOne(r, false, false);
       for (const c of col.c) drawOne(c.r, !!c.o, !!c.pd);
     }
     if (tiny) return;
+    const lw = (n) => n / this.tf.k;
     ctx.fillStyle = C.fg;
     ctx.fill(male);
     ctx.fill(female);
@@ -589,75 +597,76 @@ export class QuiltView extends EventTarget {
     }
   }
 
-  /** The letter of each column sits in its own header cell, directly above the column's top member. */
-  drawHeaders(q, c0, c1, ry, cx, px) {
+  /** The state letter of each column, in its header cell. */
+  drawHeaders(q, g, c0, c1, px) {
     if (px < 9) return;
     const { ctx, colors: C } = this;
     const { x, y, k } = this.tf;
-    ctx.font = `700 ${Math.min(RH * k * 0.62, 16)}px ${this.font()}`;
+    ctx.font = `700 ${Math.min(HH * k * 0.62, 16)}px ${this.font()}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = C.fg;
     for (let j = c0; j <= c1; j++) {
-      const sxm = x + (cx(j) + CW / 2) * k;
-      const sym = y + (ry(q.colMin[j] - 1) + RH / 2) * k;
+      const sxm = x + (g.cx[j] + CW / 2) * k;
+      const sym = y + (g.chy[j] + HH / 2) * k;
       if (sxm < -20 || sxm > this.size.w + 20 || sym < -20 || sym > this.size.h + 20) continue;
-      ctx.fillText(t('state.' + (q.cols[j].h === 'none' ? 'none' : q.cols[j].h)), sxm, sym + 0.5);
+      ctx.fillText(t('state.' + q.cols[j].h), sxm, sym + 0.5);
     }
   }
 
-  drawLabels(q, r0, r1, ry, cx) {
+  /** Names sit left-aligned in their slot, between the columns where the person is a child (left) and a parent (right). */
+  drawLabels(q, g, r0, r1) {
     const fs = this.fontSize();
     if (fs < 4) return;
+    const alpha = this.anim ? Math.max(0, (this.anim.p - 0.55) / 0.45) : 1; // names return once the glide settles
+    if (alpha <= 0) return;
     const { ctx, colors: C } = this;
     const { x, y, k } = this.tf;
+    ctx.globalAlpha = alpha;
     ctx.textBaseline = 'middle';
-    ctx.textAlign = 'right';
+    ctx.textAlign = 'left';
     ctx.font = `${fs}px ${this.font()}`;
     const greek = fs < 8.5 || this.privacy;
     ctx.lineJoin = 'round';
+    const W = this.size.w;
     for (let i = r0; i <= r1; i++) {
       const p = q.people[i];
-      const first = q.labelFirst[i] < 0 ? 0 : q.labelFirst[i];
-      const sx = x + cx(first) * k - 4;
-      const top = y + ry(i) * k;
-      const sy = top + (RH * k) / 2;
-      if (sy < -fs || sy > this.size.h + fs || sx < -20) continue;
-      const text = q.labelText(i, this.labelMode);
+      const sx = x + (g.rnx[i] + g.lo[i]) * k;
+      const sy = y + (g.ry[i] + RH / 2) * k;
+      const tw = g.tw[i] * k;
+      if (sy < -fs || sy > this.size.h + fs || sx > W || sx + tw < 0) continue;
+      const text = q.labelText(i, this._labelMode);
       if (greek) {
         ctx.fillStyle = C.muted;
-        ctx.globalAlpha = 0.35;
-        const wBar = Math.min(text.length * fs * 0.55, 220);
-        ctx.fillRect(sx - wBar, sy - fs * 0.3, wBar, fs * 0.6);
-        ctx.globalAlpha = 1;
-        if (p.p && wBar > 2) {
+        ctx.globalAlpha = alpha * 0.35;
+        ctx.fillRect(sx, sy - fs * 0.3, tw, fs * 0.6);
+        ctx.globalAlpha = alpha;
+        if (p.p && tw > 2) {
           ctx.strokeStyle = C.pending;
           ctx.lineWidth = 1;
-          ctx.strokeRect(sx - wBar - 2, sy - fs * 0.45, wBar + 4, fs * 0.9);
+          ctx.strokeRect(sx - 2, sy - fs * 0.45, tw + 4, fs * 0.9);
         }
         continue;
       }
-      const tw = ctx.measureText(text).width;
-      const dead = !!p.d; // a recorded death; unknown is not "deceased"
-      if (dead) {
+      if (p.d) {
+        // a recorded death (unknown is not "deceased")
         ctx.fillStyle = C.dead;
-        ctx.fillRect(sx - tw - 3, sy - fs * 0.62, tw + 6, fs * 1.24);
+        ctx.fillRect(sx - 3, sy - fs * 0.62, tw + 6, fs * 1.24);
       }
       if (p.p) {
         // waiting for review: an amber frame around the name and a hatched marker before it
-        const bx = sx - tw - 7;
         const bh = Math.min(RH * k * 0.92, fs * 1.5);
         ctx.fillStyle = C.pending;
-        ctx.globalAlpha = 0.14;
+        ctx.globalAlpha = alpha * 0.14;
         ctx.beginPath();
-        ctx.roundRect(bx, sy - bh / 2, tw + 12, bh, 4);
+        ctx.roundRect(sx - 5, sy - bh / 2, tw + 10, bh, 4);
         ctx.fill();
-        ctx.globalAlpha = 1;
+        ctx.globalAlpha = alpha;
         ctx.strokeStyle = C.pending;
         ctx.lineWidth = 1.6;
         ctx.stroke();
-        const m = Math.min(RH * k * 0.78, fs * 1.2);
-        this.pendingMarker(bx - m - 3, sy - m / 2, m);
+        const m = Math.min(RH * k * 0.7, fs * 1.1);
+        this.pendingMarker(x + (g.rnx[i] + 1) * k, sy - m / 2, m);
       }
       if (this.outlines) {
         ctx.lineWidth = 3;
@@ -666,14 +675,8 @@ export class QuiltView extends EventTarget {
       }
       ctx.fillStyle = C.fg;
       ctx.fillText(text, sx, sy);
-      // the name is underlined by the row's own line, which continues from the text to the first cell
-      ctx.strokeStyle = C.line;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(sx - tw - 4, top + RH * k);
-      ctx.lineTo(sx + 4, top + RH * k);
-      ctx.stroke();
     }
+    ctx.globalAlpha = 1;
   }
 
   /** The small hatched amber square that marks something waiting for review. */
