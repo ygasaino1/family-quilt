@@ -70,4 +70,4 @@ PLAYWRIGHT_PATH=$(npm root -g)/playwright node web/tests/e2e.mjs   # browser tes
 node web/tests/keys.mjs                                              # every text key exists in locales/en.json
 ```
 
-Screenshots from the browser tests are in `docs/screenshots/`.
+Screenshots from the browser tests (light, dark, pending, review panel) are in `docs/screenshots/`.
