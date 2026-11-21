@@ -57,3 +57,17 @@ New code: MIT (`LICENSE`). No GeneaQuilts code is ported yet; when it is, the BS
 - `getrandom`: the agent token and MCP session ids.
 
 The stdio bridge uses a hand-written localhost HTTP/1.1 client over `std::net::TcpStream` instead of an HTTP client crate (one fewer dependency; it only ever talks to 127.0.0.1).
+
+## Phase 5: the user interface
+
+The UI is plain HTML, CSS and JavaScript in `web/`, compiled into the executable (`crates/server/src/web.rs`; set `FAMILY_WEB_DIR` to serve from disk while developing). It uses no framework, no CDN and no runtime download. No new Rust dependency was added in this phase.
+
+Development-only (not shipped, not needed to build or run the app): **Playwright** drives a bundled Chromium for the browser tests.
+
+```
+cargo build -p family-server
+PLAYWRIGHT_PATH=$(npm root -g)/playwright node web/tests/e2e.mjs   # browser tests (build first: the UI is embedded)
+node web/tests/keys.mjs                                              # every text key exists in locales/en.json
+```
+
+Screenshots from the browser tests are in `docs/screenshots/`.

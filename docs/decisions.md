@@ -95,3 +95,29 @@ Phase 1 needs crates.io. Network for package installs was blocked in the Phase 0
 - **D (headless).** `family-app --data DIR` starts only the server. The bind address is configurable; localhost is the default and any other value prints a loud warning. Remote use is, for now, an SSH tunnel or a private network (Tailscale, WireGuard); no login system is added.
 
 **Remote/hosted access is not planned.** It is a possible future feature only: not on the phase list, nothing decided. It would need login and sessions, HTTPS, per-user permissions, rate limiting, server backups and an encryption decision. The design must not block it (no assumption that the window and server share a machine), nothing more.
+
+## Phase 5 (quilt renderer, sidebar, review UI, translation)
+
+**Where things are.** `web/` (plain HTML/CSS/JS, embedded in the exe; the server also answers `/locales/*.json`). Modules: `view.js` (Canvas 2D renderer + pan/zoom/selection), `quilt.js` (data model, ancestors/descendants, labels), `minimap.js`, `sidebar.js`, `review.js`, `settings.js`, `export.js`, `i18n.js` (`t()`, dates, `qps` pseudo-language), `prefs.js`, `dom.js`. Names and other data are always inserted with `textContent`; the page has a strict Content-Security-Policy (`default-src 'self'`).
+
+**Server additions** (all under `/api`, same guards): `GET /quilt` (+ progress, cancel), `GET/PUT /settings` (tree title, stored in the file), `GET /export/json`, `GET /export/gedcom`, `POST /import/gedcom`, `PATCH /names/{id}`; `--port` for the headless binary.
+
+**Rendering.** World units: column 26 x row 24; header band above row 0. Rows and columns are index-addressed, so only the visible range is visited (binary search inside a column). Shapes are batched into one path per style. Zoom levels: below ~1.2 px per column cells are skipped (only lines remain); below ~4 px they are plain blocks; labels are greeked below 8 px and hidden below 4 px. Symbols follow the mock-up: square = man, circle = woman, diamond = other/unknown; filled = parent or birth child; hollow outline = non-birth child; pending = dashed amber outline with hatching, a badge and an amber dot before the name; header letters come from the translation table (M, U, D, ?).
+
+**Selection.** Click a cell or name = that person's row; click a header = that column's family; shift-click adds another selection in the next free colour (7 colours); a click on empty space clears. Selection never moves the view (tested). Highlight modes cycle (ancestors and descendants / only the selection / ancestors / descendants) with a blood-only / whole-family toggle (blood = birth links only). During the end-of-layout glide, clicks pick what is drawn, not where it is going.
+
+**Option A in the UI.** The quick layout is shown at once; a strip shows the real stage and score ("Polishing (crossings a → b)") with "Keep current layout"; when the careful layout is ready, one glide of 0.5 s moves rows and columns (instant with reduced motion); selection and view stay put (tested). "Show live progress" (Settings, off by default) shows the intermediate arrangements.
+
+**Choices I made where the spec was silent.**
+- Given-name and surname labels are split from the display name (surname = last word). The store has structured names, but the quilt payload carries only the display name; this will be wrong for some names (particles, Persian order). Proper fix: send `given`/`family` in the payload.
+- The relationship sentence ("X is the ... of Y") comes from the server in English; it is not yet in the translation table.
+- History in the sidebar is per person; the global history list is only an API for now.
+- Sex is a letter in the quilt payload (M/F/X/U) and a word in the people API; `sexWord()` / `sexLetter()` in `dom.js` are the only conversion.
+- The page keeps theme, text size, language, privacy mode and label/highlight choices in the browser (per viewer); only the tree title lives in the file.
+- Privacy mode greeks the names on the canvas and blurs the sidebar, tooltip and lists until hovered or focused.
+
+**Checks run.** `web/tests/e2e.mjs` (Playwright): symbols by pixel, hollow cell, header letter, select without view jump, shift-select with its own colour and "how related", search, agent proposal appearing (badge, toast, pending look), review (your words, before/after, picture, approve; reject changes nothing), keyboard, 44 px targets, highlight modes and blood toggle, label/layout/privacy, big file with progress strip, one glide and keep-current, dark theme, settings/export/agent details, no missing translation keys, pseudo-language. `web/tests/keys.mjs` and `crates/server/tests/web.rs` (every file in `web/` is embedded; CSP; forged Host refused).
+
+**Performance (10,115 people, 4,800 columns).** In headless Chromium (software rendering, so conservative for a real GPU): 59-60 frames/s while panning at four zoom levels, 0.1-0.5 ms of drawing per frame, zoom steps under 2 ms. Quick layout 0.6 s (debug build); the GEDCOM import took 9.9 s in a debug build. Not yet measured on Windows/WebView2.
+
+**Not done in this phase (Phase 6 or later).** The window itself (wry), quit-with-confirm, first-run wizard, password unlock screen, automatic backups, packaging; the custom-protocol transport (hybrid decision); selecting people with the keyboard alone (arrows pan, `+`/`-`/`0` zoom, search + Enter selects, but there is no row-by-row keyboard focus yet); a text-size test beyond the setting itself.

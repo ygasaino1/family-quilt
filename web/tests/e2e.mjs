@@ -72,6 +72,7 @@ try {
   await page.goto(base + '/');
   await page.waitForSelector('html[data-ready="1"]');
   await page.waitForFunction(() => window.__app.view.q && window.__app.view.q.n === 4);
+  await page.waitForFunction(() => document.getElementById('strip').hidden && !window.__app.view.anim, null, { timeout: 15000 });
 
   // Put the quilt at a readable zoom so cells are easy to hit.
   await page.evaluate(() => {
@@ -241,6 +242,107 @@ try {
     await page.waitForFunction(() => document.getElementById('review-badge').hidden, null, { timeout: 8000 });
     const found = await ui('/people?q=Ghost');
     assert.equal(found.people.length, 0);
+  });
+
+  await check('keyboard: arrows pan, + and - zoom, 0 fits; toolbar targets are at least 44 px', async () => {
+    await page.click('#nav-quilt');
+    await page.focus('#quilt');
+    const a = await page.evaluate(() => ({ ...window.__app.view.tf }));
+    await page.keyboard.press('ArrowLeft');
+    await page.keyboard.press('+');
+    const b = await page.evaluate(() => ({ ...window.__app.view.tf }));
+    assert.ok(b.x !== a.x && b.k > a.k);
+    await page.keyboard.press('0');
+    await page.waitForTimeout(400);
+    const small = await page.$$eval('.bar .btn:not(.small), .bar .tab, .bar select, .bar input', (els) => els.filter((e) => e.offsetParent).map((e) => [e.id || e.textContent.trim(), e.getBoundingClientRect()]).filter(([, r]) => r.height < 43.5 || r.width < 43.5).map(([n]) => n));
+    assert.deepEqual(small, []);
+  });
+
+  await check('highlight modes: relatives of a selection are tinted, "none" tints nothing, blood toggle changes reach', async () => {
+    const r = await page.evaluate(() => {
+      const v = window.__app.view;
+      const q = v.q;
+      const bob = q.people.findIndex((p) => p.n.startsWith('Bob'));
+      v.setSelection([{ kind: 'row', ids: [q.people[bob].id] }]);
+      v.setHighlight('all', true);
+      const all = v.relRows.size;
+      v.setHighlight('none', true);
+      const none = v.relRows.size;
+      v.setHighlight('descendants', true);
+      const blood = v.relRows.size;
+      v.setHighlight('descendants', false);
+      const family = v.relRows.size;
+      v.clearSelection();
+      v.setHighlight('all', true);
+      return { all, none, blood, family };
+    });
+    assert.ok(r.all >= 1);
+    assert.equal(r.none, 0);
+    assert.ok(r.family > r.blood, 'adopted Dee only counts when the whole family is followed: ' + JSON.stringify(r));
+  });
+
+  await check('label modes, layer-by-layer mode and privacy mode', async () => {
+    await page.selectOption('#label-mode', 'surname');
+    assert.equal(await page.evaluate(() => window.__app.view.q.label(0, 'surname')), 'Root');
+    await page.selectOption('#label-mode', 'full');
+    await page.selectOption('#layout-mode', 'layer');
+    await page.waitForFunction(() => window.__app.view.q.payload.mode === 'layer');
+    await page.selectOption('#layout-mode', 'tree');
+    await page.waitForFunction(() => window.__app.view.q.payload.mode === 'tree');
+    await page.click('#settings');
+    await page.check('#set-privacy');
+    assert.equal(await page.evaluate(() => window.__app.view.privacy), true);
+    await page.uncheck('#set-privacy');
+    await page.keyboard.press('Escape');
+  });
+
+  await check('big file: quick layout first, progress strip, one glide at the end, selection and view stay put; keep-current cancels', async () => {
+    const gen = process.env.GEN_GEDCOM || path.join(path.dirname(exe), 'gen_gedcom');
+    const ged = await new Promise((resolve, reject) => {
+      const c = spawn(gen, ['400', '5'], { stdio: ['ignore', 'pipe', 'inherit'] });
+      let b = '';
+      c.stdout.on('data', (d) => (b += d));
+      c.on('close', () => resolve(b));
+      c.on('error', reject);
+    });
+    const res = await fetch(base + '/api/import/gedcom', { method: 'POST', headers: { 'Sec-Fetch-Site': 'same-origin' }, body: ged });
+    assert.ok(res.ok);
+    await page.click('#nav-quilt');
+    await page.evaluate(() => window.__app.refreshAll());
+    await page.waitForFunction(() => window.__app.view.q.n > 300);
+    // The strip shows the real stage while the careful layout runs.
+    await page.waitForFunction(() => !document.getElementById('strip').hidden, null, { timeout: 15000 });
+    assert.match(await page.textContent('#strip-text'), /Ranking|Ordering|Polishing|Improving/);
+    // Select someone and look at the view: neither may change when the better layout arrives.
+    const id = await page.evaluate(() => {
+      const v = window.__app.view;
+      v.tf = { k: 0.6, x: 300, y: 80 };
+      v.anim = null;
+      const p = v.q.people[5];
+      v.setSelection([{ kind: 'row', ids: [p.id] }]);
+      return p.id;
+    });
+    const tf0 = await page.evaluate(() => ({ ...window.__app.view.tf }));
+    await page.waitForFunction(() => document.getElementById('strip').hidden, null, { timeout: 120000 });
+    await page.waitForFunction(() => !window.__app.view.anim, null, { timeout: 5000 });
+    const after = await page.evaluate(() => ({ tf: { ...window.__app.view.tf }, sel: window.__app.view.sel.map((s) => s.ids[0]), layout: window.__app.view.q.payload.layout }));
+    assert.deepEqual(after.tf, tf0);
+    assert.deepEqual(after.sel, [id]);
+    assert.equal(after.layout, 'full');
+    // Start another careful layout and keep the current one.
+    await page.selectOption('#layout-mode', 'layer');
+    await page.waitForFunction(() => !document.getElementById('strip').hidden, null, { timeout: 15000 });
+    await page.click('#strip-keep');
+    await page.waitForFunction(() => document.getElementById('strip').hidden);
+    let pr;
+    for (let i = 0; i < 100; i++) {
+      pr = await ui('/quilt/progress?mode=layer&pending=1');
+      if (pr.job.state !== 'running') break;
+      await sleep(100);
+    }
+    assert.ok(pr.job.state === 'cancelled' || pr.job.state === 'done', 'the job stops soon after "keep current layout": ' + JSON.stringify(pr.job));
+    await page.selectOption('#layout-mode', 'tree');
+    await page.waitForFunction(() => window.__app.view.q.payload.mode === 'tree');
   });
 
   await check('dark theme renders and differs from light', async () => {

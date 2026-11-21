@@ -103,5 +103,6 @@ pre.snip { background: var(--bg); border: 1px solid var(--line); border-radius: 
 .toast { background: var(--panel); border: 1px solid var(--line); border-inline-start: 5px solid var(--accent); padding: 10px 14px; border-radius: 8px; box-shadow: 0 4px 16px #0004; }
 .toast.error { border-inline-start-color: var(--danger); }
 .privacy canvas { filter: none; }
-body.privacy .blur { filter: blur(6px); }
+body.privacy #side, body.privacy #tip b, body.privacy #people-list, body.privacy #review-root .list, body.privacy .review-quilt { filter: blur(7px); }
+body.privacy #side:hover, body.privacy #side:focus-within { filter: none; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }

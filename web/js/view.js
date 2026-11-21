@@ -28,6 +28,7 @@ export class QuiltView extends EventTarget {
     this.blood = true;
     this.labelMode = 'full';
     this.outlines = true;
+    this.privacy = false;
     this.matches = new Set(); // rows matching the search
     this.dirty = true;
     this.anim = null; // glide between two layouts
@@ -288,19 +289,26 @@ export class QuiltView extends EventTarget {
     const { x, y, k } = this.tf;
     const wx = (sx - x) / k;
     const wy = (sy - y) / k;
-    if (this.anim) return null; // no picking during the glide
+    const a = this.anim; // during the glide, pick what is drawn, not where it is going
     if (wy < 0) {
       if (wy < -HH) return null;
       const j = Math.floor(wx / CW);
       return j >= 0 && j < q.m ? { type: 'col', col: j } : null;
     }
-    const r = Math.floor(wy / RH);
+    let r = Math.floor(wy / RH);
+    let j = Math.floor(wx / CW);
+    if (a) {
+      r = -1;
+      j = -1;
+      for (let i = 0; i < q.n; i++) if (wy >= a.rowY[i] && wy < a.rowY[i] + RH) { r = i; break; }
+      for (let c = 0; c < q.m; c++) if (wx >= a.colX[c] && wx < a.colX[c] + CW) { j = c; break; }
+    }
     if (r < 0 || r >= q.n) return null;
-    const j = Math.floor(wx / CW);
     if (j >= 0 && j < q.m) {
       const cell = q.cellAt(j, r);
       if (cell) return { type: 'cell', row: r, col: j, ...cell };
     }
+    if (a) return null;
     const first = q.first[r] < 0 ? 0 : q.first[r];
     const right = first * CW;
     const fs = this.fontSize();
@@ -582,7 +590,7 @@ export class QuiltView extends EventTarget {
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'right';
     ctx.font = `${fs}px ${this.font()}`;
-    const greek = fs < 8;
+    const greek = fs < 8 || this.privacy;
     ctx.lineJoin = 'round';
     for (let i = r0; i <= r1; i++) {
       const p = q.people[i];
