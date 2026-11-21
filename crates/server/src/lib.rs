@@ -16,6 +16,7 @@ pub mod ops;
 pub mod quilt;
 pub mod token;
 pub mod ui;
+pub mod web;
 
 use axum::extract::{Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
@@ -146,7 +147,7 @@ async fn agent_guard(State(st): State<Shared>, mut req: Request, next: Next) -> 
 pub fn router(state: Shared) -> Router {
     let agent = Router::new().nest("/v1", agent::routes()).merge(mcp::routes()).layer(middleware::from_fn_with_state(state.clone(), agent_guard));
     let api = ui::routes().layer(middleware::from_fn(ui_guard));
-    Router::new().nest("/agent", agent).nest("/api", api).layer(middleware::from_fn(host_guard)).with_state(state)
+    Router::new().nest("/agent", agent).nest("/api", api).fallback(web::serve_asset).layer(middleware::from_fn(host_guard)).with_state(state)
 }
 
 /// Bind to a free localhost port, serve, and return the port. Used by the app and by tests.

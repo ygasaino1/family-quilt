@@ -15,6 +15,7 @@ family-store = { path = "../store" }
 family-review = { path = "../review" }
 family-relate = { path = "../relate" }
 family-families = { path = "../families" }
+family-gedcom = { path = "../gedcom" }
 family-layout = { path = "../layout" }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal"] }

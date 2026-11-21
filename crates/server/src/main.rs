@@ -49,7 +49,7 @@ async fn main() {
     };
     let tok = token::load_or_create(&dir).expect("cannot create the agent token");
     let state = AppState::new(store, tok, dir.clone());
-    let (port, handle) = serve(state, 0).await.expect("cannot start the server");
+    let (port, handle) = serve(state, args.iter().position(|a| a == "--port").and_then(|i| args.get(i + 1)).and_then(|p| p.parse().ok()).unwrap_or(0)).await.expect("cannot start the server");
     token::write_endpoint(&dir, port).ok();
     eprintln!("Family tree server on http://127.0.0.1:{port} (data: {})", dir.display());
     let _ = tokio::signal::ctrl_c().await;

@@ -8,7 +8,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use family_review::apply::{self, ApproveRequest};
-use family_review::fields::{self, apply_person, apply_relationship};
+use family_review::fields::{self, apply_name, apply_person, apply_relationship};
 use family_review::{query, review};
 use family_store::{AccessContext, FuzzyDate, LinkKind, NewName, NewPerson, NewRelationship, Origin, PartialDate, PartnershipState, Qualifier, RelType, Sex, Store, StoreError};
 use serde::Deserialize;
@@ -33,12 +33,17 @@ pub fn routes() -> Router<Shared> {
         .route("/proposals/{id}/reject", post(reject))
         .route("/people", get(people).post(create_person))
         .route("/people/{id}", get(person).patch(patch_person).delete(delete_person))
+        .route("/names/{id}", patch(patch_name))
         .route("/relationships", post(create_link))
         .route("/relationships/{id}", patch(patch_link).delete(delete_link))
         .route("/relationship", get(relationship))
         .route("/history", get(history))
         .route("/history/{id}/undo", post(undo))
         .route("/backup", get(backup))
+        .route("/export/json", get(export_json))
+        .route("/export/gedcom", get(export_gedcom))
+        .route("/import/gedcom", post(import_gedcom).layer(axum::extract::DefaultBodyLimit::max(130 * 1024 * 1024)))
+        .route("/settings", get(get_settings).put(put_settings))
         .route("/settings/agent", get(agent_settings))
         .route("/settings/agent/test", post(agent_test))
         .layer(axum::extract::DefaultBodyLimit::max(2_000_000))
@@ -254,4 +259,72 @@ async fn agent_test(State(st): State<Shared>) -> Json<Value> {
     st.log_activity("settings", "connection test");
     let n = query::search(&lock(&st), "a", 1, false).map(|v| v.len()).is_ok();
     Json(json!({"ok": n, "tools": tools}))
+}
+
+/// Settings kept in the file itself (the rest, such as theme and text size, stays in the browser).
+const FILE_SETTINGS: &[&str] = &["tree_title"];
+
+async fn get_settings(State(st): State<Shared>) -> Result<Json<Value>, ApiError> {
+    let s = lock(&st);
+    let mut o = serde_json::Map::new();
+    for k in FILE_SETTINGS {
+        o.insert((*k).into(), json!(s.meta_get(&CTX, &format!("setting:{k}"))?.unwrap_or_default()));
+    }
+    Ok(Json(Value::Object(o)))
+}
+
+async fn put_settings(State(st): State<Shared>, Json(b): Json<Value>) -> Result<Json<Value>, ApiError> {
+    let o = b.as_object().ok_or_else(|| ApiError::bad_request("send an object"))?;
+    let mut s = lock(&st);
+    for (k, v) in o {
+        if !FILE_SETTINGS.contains(&k.as_str()) {
+            return Err(ApiError::bad_request(&format!("unknown setting '{k}'")));
+        }
+        let text = v.as_str().ok_or_else(|| ApiError::bad_request("settings are text"))?;
+        if text.chars().count() > 200 {
+            return Err(ApiError::bad_request("too long (200 characters at most)"));
+        }
+        s.meta_set(&CTX, &format!("setting:{k}"), text)?;
+    }
+    Ok(Json(json!({"ok": true})))
+}
+
+/// Everything verified, as one JSON file people can keep or process elsewhere.
+async fn export_json(State(st): State<Shared>) -> Result<Response, ApiError> {
+    let (people, links, title) = {
+        let s = lock(&st);
+        (s.all_people(&CTX, false)?, s.all_relationships(&CTX, false)?, s.meta_get(&CTX, "setting:tree_title")?.unwrap_or_default())
+    };
+    let body = serde_json::to_vec_pretty(&json!({"format": "family-tree-export", "version": 1, "title": title, "exported_at": family_store::ids::now_iso(), "people": people, "relationships": links}))
+        .unwrap_or_default();
+    let name = format!("family-tree-{}.json", &family_store::ids::now_iso()[..10]);
+    Ok(([(header::CONTENT_TYPE, "application/json".to_string()), (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{name}\""))], body).into_response())
+}
+
+/// GEDCOM text in the request body; people and links are added as verified records in one transaction.
+async fn import_gedcom(State(st): State<Shared>, body: axum::body::Bytes) -> Result<Json<Value>, ApiError> {
+    let st2 = st.clone();
+    tokio::task::spawn_blocking(move || {
+        let plan =
+            family_gedcom::import_gedcom(std::io::Cursor::new(&body[..]), &family_gedcom::Limits::default()).map_err(|e| ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, e.code(), &e.to_string()))?;
+        let report = plan.apply(&mut lock(&st2), &CTX, &Origin::human())?;
+        let warnings: Vec<Value> = plan.warnings.iter().take(50).map(|w| json!({"line": w.line, "code": w.code, "message": w.message})).collect();
+        Ok(Json(json!({"people": report.person_ids.len(), "links": report.links_created, "warnings": warnings, "warning_count": plan.warnings.len()})))
+    })
+    .await
+    .map_err(|_| ApiError::bad_request("import task failed"))?
+}
+
+async fn export_gedcom(State(st): State<Shared>) -> Result<Response, ApiError> {
+    let out = family_gedcom::export_gedcom(&lock(&st), &CTX, family_gedcom::GedcomVersion::V551, false)?;
+    let name = format!("family-tree-{}.ged", &family_store::ids::now_iso()[..10]);
+    Ok(([(header::CONTENT_TYPE, "text/plain; charset=utf-8".to_string()), (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{name}\""))], out).into_response())
+}
+
+async fn patch_name(State(st): State<Shared>, Path(id): Path<String>, Json(b): Json<Value>) -> Result<Json<Value>, ApiError> {
+    let pairs = field_pairs(&b, fields::NAME_FIELDS, None)?;
+    let mut s = lock(&st);
+    let (person_id, _) = s.find_name(&CTX, &id)?;
+    apply_name(&mut s, &CTX, &id, &pairs, HUMAN)?;
+    Ok(Json(serde_json::to_value(s.get_person(&CTX, &person_id)?).unwrap_or_default()))
 }

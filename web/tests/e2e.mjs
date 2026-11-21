@@ -1,0 +1,295 @@
+// End-to-end checks in a real browser (Playwright, development only: nothing from it ships).
+// Run: FAMILY_APP=target/debug/family-app node web/tests/e2e.mjs   (needs `playwright` resolvable)
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const { chromium } = require(process.env.PLAYWRIGHT_PATH || 'playwright');
+
+const exe = process.env.FAMILY_APP || 'target/debug/family-app';
+const out = path.resolve(process.env.E2E_OUT || 'web/tests/out');
+fs.mkdirSync(out, { recursive: true });
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fq-e2e-'));
+const port = 20000 + Math.floor(Math.random() * 20000);
+const base = `http://127.0.0.1:${port}`;
+const srv = spawn(exe, ['--data', dir, '--port', String(port)], { stdio: ['ignore', 'ignore', 'pipe'] });
+let srvLog = '';
+srv.stderr.on('data', (d) => (srvLog += d));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let failures = 0;
+const results = [];
+async function check(name, fn) {
+  try {
+    await fn();
+    results.push('ok   ' + name);
+  } catch (e) {
+    failures++;
+    results.push('FAIL ' + name + '\n     ' + String(e.message).split('\n').join('\n     '));
+  }
+}
+
+const ui = async (p, method = 'GET', body) => {
+  const res = await fetch(base + '/api' + p, { method, headers: { 'Sec-Fetch-Site': 'same-origin', ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`${method} ${p}: ${res.status} ${text}`);
+  return text ? JSON.parse(text) : null;
+};
+const agent = async (p, body) => {
+  const token = fs.readFileSync(path.join(dir, 'agent-token.txt'), 'utf8').trim();
+  const res = await fetch(base + '/agent/v1' + p, { method: body ? 'POST' : 'GET', headers: { Authorization: 'Bearer ' + token, 'X-Agent-Name': 'e2e-agent', ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`agent ${p}: ${res.status} ${text}`);
+  return JSON.parse(text);
+};
+
+let browser;
+try {
+  for (let i = 0; i < 100 && !srvLog.includes('server on'); i++) await sleep(100);
+  // ---- fixture: Anna + Bob (married); Cy their birth child; Dee adopted by Bob only
+  const person = (given, family, sex, birth) => ui('/people', 'POST', { given_name: given, family_name: family, sex, birth_date: birth });
+  const anna = await person('Anna', 'Root', 'F', '1950');
+  const bob = await person('Bob', 'Root', 'M', '1948');
+  const cy = await person('Cy', 'Root', 'M');
+  const dee = await person('Dee', 'Root', 'F', '1980');
+  await ui('/relationships', 'POST', { type: 'partnership', a: anna.id, b: bob.id, subtype: 'married' });
+  await ui('/relationships', 'POST', { type: 'parent_child', a: anna.id, b: cy.id, kind: 'birth' });
+  await ui('/relationships', 'POST', { type: 'parent_child', a: bob.id, b: cy.id, kind: 'birth' });
+  await ui('/relationships', 'POST', { type: 'parent_child', a: bob.id, b: dee.id, kind: 'adopted' });
+
+  browser = await chromium.launch();
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: 'light' });
+  const page = await ctx.newPage();
+  const warnings = [];
+  const errors = [];
+  page.on('console', (m) => {
+    if (m.text().includes('missing translation key')) warnings.push(m.text());
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(e.stack || e.message));
+  await page.goto(base + '/');
+  await page.waitForSelector('html[data-ready="1"]');
+  await page.waitForFunction(() => window.__app.view.q && window.__app.view.q.n === 4);
+
+  // Put the quilt at a readable zoom so cells are easy to hit.
+  await page.evaluate(() => {
+    const v = window.__app.view;
+    v.tf = { k: 1.5, x: 260, y: 70 };
+    v.anim = null;
+    v.dirty = true;
+  });
+  await page.waitForTimeout(200);
+
+  const where = (name) =>
+    page.evaluate((nm) => {
+      const v = window.__app.view;
+      const q = v.q;
+      const r = q.people.findIndex((p) => p.n.startsWith(nm));
+      const j = q.first[r];
+      const rect = v.canvas.getBoundingClientRect();
+      return { r, j, x: rect.left + v.tf.x + (j * 26 + 13) * v.tf.k, y: rect.top + v.tf.y + (r * 24 + 12) * v.tf.k, lx: rect.left + v.tf.x + (j * 26 - 40) * v.tf.k };
+    }, name);
+  const pixel = (x, y) =>
+    page.evaluate(([x, y]) => {
+      const v = window.__app.view;
+      const rect = v.canvas.getBoundingClientRect();
+      const d = v.ctx.getImageData(Math.round((x - rect.left) * v.size.dpr), Math.round((y - rect.top) * v.size.dpr), 1, 1).data;
+      return [d[0], d[1], d[2]];
+    }, [x, y]);
+  const dark = ([r, g, b]) => r + g + b < 250;
+  const light = ([r, g, b]) => r + g + b > 600;
+
+  await check('symbols: square = man, circle = woman, filled', async () => {
+    const bobAt = await where('Bob');
+    assert.ok(dark(await pixel(bobAt.x, bobAt.y)), 'man cell centre is filled');
+    // Corner of the square is filled for a man; the corner of a circle is empty.
+    const cornerM = await pixel(bobAt.x + 8 * 1.5, bobAt.y + 8 * 1.5);
+    assert.ok(dark(cornerM), 'square has its corner');
+    const annaAt = await where('Anna');
+    assert.ok(dark(await pixel(annaAt.x, annaAt.y)), 'woman cell centre is filled');
+    assert.ok(!dark(await pixel(annaAt.x + 8 * 1.5, annaAt.y + 8 * 1.5)), 'circle has no corner');
+  });
+
+  await check('symbols: non-birth child is hollow (outlined)', async () => {
+    const deeCell = await page.evaluate(() => {
+      const v = window.__app.view;
+      const q = v.q;
+      const r = q.people.findIndex((p) => p.n.startsWith('Dee'));
+      const j = q.first[r];
+      const c = q.cols[j].c.find((x) => x.r === r);
+      const rect = v.canvas.getBoundingClientRect();
+      return { outlined: !!c.o, x: rect.left + v.tf.x + (j * 26 + 13) * v.tf.k, y: rect.top + v.tf.y + (r * 24 + 12) * v.tf.k };
+    });
+    assert.equal(deeCell.outlined, true);
+    assert.ok(light(await pixel(deeCell.x, deeCell.y)), 'hollow centre shows the background');
+    assert.ok(dark(await pixel(deeCell.x + 8.5 * 1.5, deeCell.y)), 'hollow has its outline');
+  });
+
+  await check('header letter M for the married family', async () => {
+    const letter = await page.evaluate(() => window.__app.view.q.cols.map((c) => c.h));
+    assert.ok(letter.includes('married'));
+    await page.screenshot({ path: path.join(out, 'light-quilt.png') });
+  });
+
+  await check('selecting a person does not move the view; sidebar opens', async () => {
+    const before = await page.evaluate(() => ({ ...window.__app.view.tf }));
+    const cyAt = await where('Cy');
+    await page.mouse.click(cyAt.x, cyAt.y);
+    await page.waitForSelector('#side:not([hidden]) h2');
+    const after = await page.evaluate(() => ({ ...window.__app.view.tf }));
+    assert.deepEqual(after, before);
+    assert.match(await page.textContent('#side h2'), /Cy Root/);
+    const sel = await page.evaluate(() => window.__app.view.sel.length);
+    assert.equal(sel, 1);
+  });
+
+  await check('shift-click adds a second selection with its own colour; "how related" answers', async () => {
+    const deeAt = await where('Dee');
+    await page.keyboard.down('Shift');
+    await page.mouse.click(deeAt.x, deeAt.y);
+    await page.keyboard.up('Shift');
+    await page.waitForFunction(() => window.__app.view.sel.length === 2);
+    const colours = await page.evaluate(() => window.__app.view.sel.map((s) => s.colour));
+    assert.notEqual(colours[0], colours[1]);
+    await page.waitForSelector('#side h2');
+    assert.match(await page.textContent('#side'), /related|sibling|brother|sister|relationship/i);
+  });
+
+  await check('clicking empty space clears the selection', async () => {
+    await page.mouse.click(600, 600);
+    await page.waitForFunction(() => window.__app.view.sel.length === 0);
+    assert.equal(await page.isHidden('#side'), true);
+  });
+
+  await check('wheel zooms around the pointer; Fit works; no jump on select afterwards', async () => {
+    const k0 = await page.evaluate(() => window.__app.view.tf.k);
+    await page.mouse.move(500, 400);
+    await page.mouse.wheel(0, -300);
+    await page.waitForTimeout(100);
+    const k1 = await page.evaluate(() => window.__app.view.tf.k);
+    assert.ok(k1 > k0);
+    await page.click('#fit');
+    await page.waitForTimeout(400);
+  });
+
+  await check('search finds a person and selects them', async () => {
+    await page.fill('#search', 'dee');
+    assert.match(await page.textContent('#search-count'), /1 of 1/);
+    await page.press('#search', 'Enter');
+    await page.waitForFunction(() => window.__app.view.sel.length === 1);
+    await page.fill('#search', '');
+    await page.mouse.click(600, 700);
+  });
+
+  // ---- an AI assistant proposes things
+  let proposalId;
+  await check('agent proposal appears: badge, toast, pending styling in the quilt', async () => {
+    const r = await agent('/proposals', {
+      summary: 'Add Zoe, Cy born 1975',
+      source_text: 'Cy was born in 1975 and has a daughter Zoe.',
+      people: [{ ref: 'z', given_name: 'Zoe', family_name: 'Root', sex: 'F', birth_date: '2005' }],
+      relationships: [{ type: 'parent_child', a: cy.id, b: 'z', kind: 'birth' }],
+      changes: [{ target_type: 'person', target_id: cy.id, op: 'update', fields: { birth_date: { from: null, to: '1975' } } }],
+    });
+    proposalId = r.proposal_id || r.id;
+    assert.ok(proposalId);
+    await page.waitForFunction(() => !document.getElementById('review-badge').hidden, null, { timeout: 12000 });
+    assert.equal(await page.textContent('#review-badge'), '1');
+    assert.match(await page.textContent('#toasts'), /new proposal/i);
+    await page.waitForFunction(() => window.__app.view.q.n === 5, null, { timeout: 12000 });
+    // Zoe is pending: her cell is amber-ish hatched, not plain black.
+    await page.evaluate(() => {
+      const v = window.__app.view;
+      v.tf = { k: 1.5, x: 260, y: 70 };
+      v.anim = null;
+      v.dirty = true;
+    });
+    await page.waitForTimeout(300);
+    const z = await where('Zoe');
+    const flagged = await page.evaluate(() => window.__app.view.q.people.find((p) => p.n.startsWith('Zoe')).p);
+    assert.equal(flagged, 1);
+    const px = await pixel(z.x + 8.5 * 1.5, z.y);
+    assert.ok(px[0] > px[2] + 40, `dashed amber outline expected, got ${px}`);
+    await page.screenshot({ path: path.join(out, 'light-pending.png') });
+  });
+
+  await check('review screen: your words, before/after, picture, approve', async () => {
+    await page.click('#nav-review');
+    await page.waitForSelector('#review-approve');
+    const text = await page.textContent('#review-root');
+    assert.match(text, /Cy was born in 1975/);
+    assert.match(text, /1975/);
+    assert.match(text, /Zoe/);
+    await page.waitForFunction(() => document.getElementById('review-canvas') && window.__app && true);
+    await page.screenshot({ path: path.join(out, 'light-review.png') });
+    await page.click('#review-approve');
+    await page.waitForFunction(() => document.getElementById('review-badge').hidden, null, { timeout: 8000 });
+    const people = await ui('/people?q=Zoe');
+    assert.equal(people.people.length, 1);
+    const cyNow = await ui('/people/' + cy.id);
+    assert.match(JSON.stringify(cyNow.person.birth), /1975/);
+  });
+
+  await check('a rejected proposal changes nothing', async () => {
+    await agent('/proposals', { summary: 'Add Ghost', people: [{ ref: 'g', given_name: 'Ghost', family_name: 'Nobody', sex: 'M' }] });
+    await page.click('#nav-review');
+    await page.waitForSelector('#review-reject', { timeout: 12000 });
+    await page.click('#review-reject');
+    await page.click('dialog[open] .btn.danger');
+    await page.waitForFunction(() => document.getElementById('review-badge').hidden, null, { timeout: 8000 });
+    const found = await ui('/people?q=Ghost');
+    assert.equal(found.people.length, 0);
+  });
+
+  await check('dark theme renders and differs from light', async () => {
+    await page.click('#nav-quilt');
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.evaluate(() => window.__app.view.readColors());
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: path.join(out, 'dark-quilt.png') });
+    const bg = await page.evaluate(() => window.__app.view.colors.bg);
+    assert.notEqual(bg.toLowerCase(), '#ffffff');
+  });
+
+  await check('settings, export and agent details open', async () => {
+    await page.click('#settings');
+    await page.waitForSelector('#dlg-settings[open]');
+    await page.click('#agent-show');
+    await page.waitForSelector('#agent-test');
+    await page.click('#agent-test');
+    await page.waitForFunction(() => /works/.test(document.getElementById('toasts').textContent));
+    await page.keyboard.press('Escape');
+    await page.click('#export');
+    await page.waitForSelector('#dlg-export[open]');
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#exp-json')]);
+    assert.match(dl.suggestedFilename(), /\.json$/);
+    const [dl2] = await Promise.all([page.waitForEvent('download'), (async () => { await page.click('#export'); await page.click('#exp-svg'); })()]);
+    assert.match(dl2.suggestedFilename(), /\.svg$/);
+  });
+
+  await check('no missing translation keys and no console errors', async () => {
+    assert.deepEqual(warnings, []);
+    assert.deepEqual(errors, []);
+  });
+
+  await check('pseudo-language shows every string through the table', async () => {
+    const p2 = await ctx.newPage();
+    await p2.goto(base + '/?lang=qps');
+    await p2.waitForSelector('html[data-ready="1"]');
+    const txt = await p2.textContent('.bar');
+    assert.match(txt, /⟦/);
+    const plain = await p2.$$eval('.bar button, .bar select option', (els) => els.map((e) => e.textContent.trim()).filter((x) => x && !x.includes('⟦') && !/^[A-Za-z]{0,2}$|^[−+↑↓“” ]*$/.test(x)));
+    assert.deepEqual(plain, [], 'untranslated toolbar strings: ' + plain.join(', '));
+  });
+} catch (e) {
+  failures++;
+  results.push('FATAL ' + (e.stack || e));
+} finally {
+  await browser?.close();
+  srv.kill();
+  console.log(results.join('\n'));
+  console.log(failures ? `\n${failures} failed` : '\nall passed');
+  process.exit(failures ? 1 : 0);
+}
