@@ -1,0 +1,23 @@
+# Upstream Graphviz files that were used as source material for our Rust code, and nothing else.
+# Format: <upstream path> TAB <Rust file> TAB <what was taken> TAB <evidence>
+# Only these paths are watched (tools/upstream-check.sh). Add a path only when code from it has been ported.
+# Evidence key: H = named in the module header, C = named in the commit message, O = confirmed by running the
+# port against `dot` built from the same 16.1.2 sources (tools/graphviz-compare).
+lib/common/ns.c	crates/layout/src/dotrank.rs	network simplex: init_rank, feasible_tree (tight subtrees, heap), cut values, leave/enter edge, update, rerank, TB_balance	H C O
+lib/dotgen/class1.c	crates/layout/src/dotrank.rs	class1: one fast edge per node pair, merging parallel edges	H C O
+lib/dotgen/decomp.c	crates/layout/src/dotrank.rs	decompose: component order by the iterative DFS (also reused by dotorder.rs)	H C O
+lib/dotgen/acyclic.c	crates/layout/src/dotrank.rs	acyclic: reverse edges found by DFS	H C O
+lib/dotgen/fastgr.c	crates/layout/src/dotrank.rs	fast graph: find_fast_edge, virtual_edge, merge_oneway, zapinlist, delete_fast_edge	H C O
+lib/dotgen/rank.c	crates/layout/src/dotrank.rs	only the order of the dot1_rank steps and the balance mode; the cluster and rank-set code is not ported	H C
+lib/dotgen/class2.c	crates/layout/src/dotorder.rs	class2: virtual node chains, merge_chain, multi-edges, opposite edges	H C O
+lib/dotgen/mincross.c	crates/layout/src/dotorder.rs	build_ranks, medians, reorder, transpose, ncross/rcross, mincross passes, merge of components	H C O
+lib/cgraph/edge.c	crates/layout/src/dotrank.rs	only the rule agedgeseqcmpf: a node's out-edges are ordered by the head's sequence number, then the edge's (out_edges_by_tail)	O
+
+# Read while porting but NOT monitored: nothing from them was ported, only constants or behaviour we rely on.
+#   lib/dotgen/dotinit.c   default edge weight 1, xpenalty 1, minlen 1
+#   lib/common/const.h     MC_SCALE = 256
+#   lib/common/shapes.c    a missing port has order 0
+#   lib/util/list.h        sorts use qsort; we assume a stable order for equal keys (TB_balance); unverified
+#   lib/cgraph/node.c      node order = creation order
+# Not ported (so not monitored): clusters, rank sets, flat edges, ports, labels, ordering attributes, x positions
+# (dot_position), splines.

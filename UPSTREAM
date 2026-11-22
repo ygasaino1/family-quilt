@@ -1,0 +1,10 @@
+# The Graphviz revision our Rust ports (crates/layout/src/dotrank.rs, dotorder.rs) are based on.
+# Read by tools/upstream-check.sh. Only ever advanced by hand, after the Rust code has been reviewed against
+# the upstream changes listed in the tracking issue.
+REPOSITORY=https://gitlab.com/graphviz/graphviz.git
+BRANCH=main
+# Release 16.1.2 (2026-11-20). The source we read was that release's tarball; it carries no commit id, so the
+# commit comes from `git ls-remote <repository> refs/tags/16.1.2`. If that id names a tag object rather than a
+# commit, the check peels it (`COMMIT^{commit}`).
+TAG=16.1.2
+COMMIT=445239ae6d37897a48adf308c8172b90162ff0bb

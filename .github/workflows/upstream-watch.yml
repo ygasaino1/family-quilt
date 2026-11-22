@@ -1,0 +1,59 @@
+name: Graphviz upstream watch
+
+# Looks at the Graphviz repository once a day and reports changes to the files our Rust ports were made from
+# (UPSTREAM_PATHS), relative to the baseline in UPSTREAM. It never changes the baseline or any Rust file.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: upstream-watch
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Fails the job (a red run) if the check could not run: fetch failure, missing baseline, rewritten history.
+      - name: Compare upstream with the baseline
+        id: check
+        run: tools/upstream-check.sh
+
+      - name: Open or update the tracking issue
+        if: steps.check.outputs.relevant == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FINGERPRINT: ${{ steps.check.outputs.fingerprint }}
+          REPORT: ${{ steps.check.outputs.report }}
+        run: |
+          set -euo pipefail
+          label="upstream-review"
+          gh label create "$label" --color d93f0b --description "Graphviz upstream changed files our Rust port is based on" 2>/dev/null || true
+          marker="<!-- upstream-fingerprint: ${FINGERPRINT} -->"
+          {
+            cat "$REPORT"
+            echo
+            echo "---"
+            echo "Review the Rust ports named above against these changes. When they have caught up, set \`COMMIT\` in \`UPSTREAM\` to the upstream commit you reviewed up to (the baseline never moves by itself) and close this issue. If this issue is closed without moving the baseline, the next check opens a new one."
+            echo
+            echo "$marker"
+          } > body.md
+          existing=$(gh issue list --label "$label" --state open --json number,body --jq '.[0] // empty')
+          if [ -z "$existing" ]; then
+            gh issue create --title "Graphviz upstream changed files our port is based on" --label "$label" --body-file body.md
+          else
+            number=$(echo "$existing" | jq -r .number)
+            if echo "$existing" | jq -r .body | grep -qF "$marker"; then
+              echo "Issue #$number already describes the newest relevant change; nothing to do."
+            else
+              gh issue edit "$number" --body-file body.md
+              gh issue comment "$number" --body "More upstream changes to the monitored files arrived (newest relevant commit \`${FINGERPRINT:0:12}\`). The description above is updated."
+            fi
+          fi

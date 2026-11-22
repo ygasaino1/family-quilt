@@ -158,3 +158,26 @@ coordinates are not needed because the original only reads the layer and the ord
   the built-in one when they cannot be used. The Graphviz layout (`engine=port`) became the default after the user reviewed the comparison (2026-11-22).
 * Licence: Graphviz is distributed under the Eclipse Public License 1.0. The port is derived work, so it is credited in
   `NOTICE` and the module headers; the EPL terms have to be checked before release.
+
+## Watching Graphviz for changes to the files we ported (2026-11-22)
+
+The Rust ports in `crates/layout/src/dotrank.rs` and `dotorder.rs` are based on Graphviz 16.1.2 (tag `16.1.2`,
+commit `445239ae6d37897a48adf308c8172b90162ff0bb`). A daily GitHub Actions job (`.github/workflows/upstream-watch.yml`)
+tells us when upstream changes the C files we actually ported, so the port cannot silently fall behind.
+
+- `UPSTREAM`: repository, branch, and the baseline commit our port is based on.
+- `UPSTREAM_PATHS`: only the C files we read and ported, each with its Rust file, what was taken, and the evidence
+  (H = header/comment in our code names it, C = commit/doc says so, O = we compared output with dot). Files we only read
+  for context, or may port later, are deliberately not listed.
+- `tools/upstream-check.sh` does the check (partial clone, no file contents copied into this repo) and writes the report;
+  `tools/test-upstream-check.sh` tests it on local fixtures (no change, unrelated change, relevant change, missing
+  baseline, rewritten history, fetch failure, empty path list).
+- One open issue labelled `upstream-review` is kept per set of changes (fingerprint in a hidden marker): no duplicates,
+  updated when new relevant commits appear. Unrelated upstream changes never open or update an issue.
+- A fetch failure, a missing baseline or a baseline no longer on the branch **fails the run** instead of passing quietly.
+- Nothing is ever advanced automatically. To catch up: review the issue, build the newer `dot` and run
+  `tools/graphviz-compare/compare.py` (see its README), port what differs, then edit `COMMIT`/`TAG` in `UPSTREAM`.
+  Closing the issue without moving the baseline makes the next run open a new one.
+- Limits: path-based monitoring flags harmless refactors too (a human decides); the workflow was tested locally only,
+  not against the real GitLab (the sandbox cannot reach it). The tag may be an annotated tag object, so the check
+  resolves it with `COMMIT^{commit}`.
