@@ -130,6 +130,7 @@
   "side.parents": "Parents",
   "side.partners": "Partners",
   "side.how_related": "How are they related?",
+  "side.details": "Details",
   "side.edit": "Edit",
   "side.delete": "Remove person",
   "side.delete_body": "Remove {name} from the tree? Their links are removed too. You can undo this from History.",

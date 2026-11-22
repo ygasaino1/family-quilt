@@ -49,7 +49,18 @@ async function render(sel) {
 }
 
 function head(title, id = 'side-title') {
-  return h('div', {}, h('button', { class: 'btn icon close', 'aria-label': t('common.close'), title: t('common.close'), onclick: close }, '×'), h('h2', { id }, title));
+  return h('div', { class: 'side-head' }, h('h2', { id }, title), h('button', { class: 'btn tiny', 'aria-label': t('common.close'), title: t('common.close'), onclick: close }, '×'));
+}
+
+// Collapsible sections, like the panels of a properties editor; what is open is remembered between selections.
+const closedByDefault = new Set(['history']);
+const openState = new Map();
+function panel(key, title, count, ...body) {
+  const open = openState.has(key) ? openState.get(key) : !closedByDefault.has(key);
+  const d = h('details', { class: 'pnl' }, h('summary', {}, h('span', {}, title), count ? h('span', { class: 'cnt' }, String(count)) : null), h('div', { class: 'pnl-body' }, body));
+  d.open = open;
+  d.addEventListener('toggle', () => openState.set(key, d.open));
+  return d;
 }
 
 function name(id) {
@@ -105,7 +116,7 @@ async function renderPerson(el, id) {
   const p = d.person;
   const when = (f) => (f && f.date !== undefined ? fmtDate(String(f.date), f.qualifier) : f ? fmtDate(String(f), 'exact') : '');
   const place = (x) => (x && (x.name || x)) || '';
-  const dl = h('dl', {});
+  const dl = h('dl', { class: 'props' });
   const add = (k, v) => v && dl.append(h('dt', {}, t(k)), h('dd', {}, v));
   add('f.sex', t('sex.' + sexWord(p.sex)));
   add('f.born', [when(p.birth), place(p.birth_place)].filter(Boolean).join(' · '));
@@ -116,24 +127,21 @@ async function renderPerson(el, id) {
   const linkRow = (l) => {
     const kindSel =
       l.role === 'partner'
-        ? h('select', { class: 'btn small', 'aria-label': t('f.state'), onchange: (e) => patchLink(l.link_id, { subtype: e.target.value }) }, STATES.map((s) => h('option', { value: s, selected: l.subtype === s }, t('state.' + s + '.long'))))
-        : h('select', { class: 'btn small', 'aria-label': t('f.kind'), onchange: (e) => changeKind(l, id, e.target.value, e.target) }, KINDS.map((k) => h('option', { value: k, selected: l.kind === k }, t('kind.' + k))));
-    return h('li', { class: 'row' }, h('button', { class: 'link', onclick: () => openPerson(l.other_id) }, l.other_name, l.status === 'pending' ? ' ●' : ''), kindSel, h('button', { class: 'btn small danger', 'aria-label': t('side.remove_link'), title: t('side.remove_link'), onclick: () => removeLink(l) }, '×'));
+        ? h('select', { class: 'sel', 'aria-label': t('f.state'), onchange: (e) => patchLink(l.link_id, { subtype: e.target.value }) }, STATES.map((s) => h('option', { value: s, selected: l.subtype === s }, t('state.' + s + '.long'))))
+        : h('select', { class: 'sel', 'aria-label': t('f.kind'), onchange: (e) => changeKind(l, id, e.target.value, e.target) }, KINDS.map((k) => h('option', { value: k, selected: l.kind === k }, t('kind.' + k))));
+    return h('li', { class: 'lrow' }, h('button', { class: 'link', onclick: () => openPerson(l.other_id) }, l.other_name, l.status === 'pending' ? ' ●' : ''), kindSel, h('button', { class: 'btn tiny danger-ghost', 'aria-label': t('side.remove_link'), title: t('side.remove_link'), onclick: () => removeLink(l) }, '×'));
   };
-  const section = (title, list) => (list.length ? [h('h3', {}, t(title)), h('ul', { class: 'linklist' }, list.map(linkRow))] : []);
+  const section = (key, title, list) => (list.length ? [panel(key, t(title), list.length, h('ul', { class: 'linklist' }, list.map(linkRow)))] : []);
   const pending = d.suggested_changes?.length ? h('div', { class: 'warn' }, t('side.suggested', { n: d.suggested_changes.length }), ' ', h('button', { class: 'link', onclick: () => app.showScreen('review') }, t('nav.review'))) : null;
   fill(el,
     head(p.display_name),
     pending,
-    dl,
-    h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => personDialog({ edit: d }) }, t('side.edit')), h('button', { class: 'btn danger', onclick: () => deletePerson(p) }, t('side.delete'))),
-    h('h3', {}, t('side.add_heading')),
-    h('div', { class: 'row' }, ['parent', 'partner', 'child', 'sibling'].map((role) => h('button', { class: 'btn', onclick: () => personDialog({ role, anchor: d }) }, t('side.add_' + role)))),
-    ...section('side.parents', group('parent')),
-    ...section('side.partners', group('partner')),
-    ...section('side.children', group('child')),
-    h('h3', {}, t('side.history')),
-    h('div', { id: 'hist' }, t('common.loading')),
+    panel('details', t('side.details'), 0, dl, h('div', { class: 'tools' }, h('button', { class: 'btn small', onclick: () => personDialog({ edit: d }) }, t('side.edit')), h('button', { class: 'btn small danger-ghost', onclick: () => deletePerson(p) }, t('side.delete')))),
+    panel('add', t('side.add_heading'), 0, h('div', { class: 'tools' }, ['parent', 'partner', 'child', 'sibling'].map((role) => h('button', { class: 'btn small', onclick: () => personDialog({ role, anchor: d }) }, '+ ' + t('side.add_' + role))))),
+    ...section('parents', 'side.parents', group('parent')),
+    ...section('partners', 'side.partners', group('partner')),
+    ...section('children', 'side.children', group('child')),
+    panel('history', t('side.history'), 0, h('div', { id: 'hist' }, t('common.loading'))),
   );
   loadHistory(id);
 }
@@ -144,7 +152,7 @@ async function loadHistory(id) {
     const { revisions } = await api(`/history?target_type=person&target_id=${id}&limit=10`);
     box?.replaceChildren(
       ...(revisions.length
-        ? revisions.map((r) => h('div', { class: 'row' }, h('span', { class: 'muted' }, `${String(r.at).slice(0, 16).replace('T', ' ')} · ${r.by}`), h('button', { class: 'btn small', onclick: () => undo(r.id) }, t('side.undo'))))
+        ? revisions.map((r) => h('div', { class: 'lrow' }, h('span', { class: 'muted' }, `${String(r.at).slice(0, 16).replace('T', ' ')} · ${r.by}`), h('button', { class: 'btn small', onclick: () => undo(r.id) }, t('side.undo'))))
         : [h('span', { class: 'muted' }, t('side.no_history'))]),
     );
   } catch (e) {

@@ -53,16 +53,35 @@ body { background: var(--bg); color: var(--fg); font-family: Inter, system-ui, "
 .empty { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 10px; align-items: center; justify-content: center; text-align: center; background: var(--quilt-bg); }
 .strip { position: absolute; inset-inline: 12px; inset-block-start: 10px; margin-inline: auto; inline-size: fit-content; max-inline-size: calc(100% - 24px); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 6px 8px 6px 14px; display: flex; gap: 12px; align-items: center; box-shadow: 0 2px 10px #0003; }
 
-.side { position: absolute; inset-block: 0; inset-inline-end: 0; inline-size: min(26rem, 100%); background: var(--panel); border-inline-start: 1px solid var(--line); overflow: auto; padding: 14px 16px 24px; box-shadow: -4px 0 16px #0003; z-index: 10; }
-.side h2 { margin: 0 0 4px; font-size: 1.15rem; }
-.side h3 { margin: 18px 0 6px; font-size: .95rem; color: var(--muted); text-transform: none; }
-.side .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
-.side dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; }
-.side dt { color: var(--muted); }
-.side dd { margin: 0; }
-.close { float: inline-end; }
+.side { position: absolute; inset-block: 0; inset-inline-end: 0; inline-size: min(19rem, 100%); background: var(--panel); border-inline-start: 1px solid var(--line); overflow: auto; padding: 0 0 16px; box-shadow: -4px 0 16px #0002; z-index: 10; font-size: .8125rem; line-height: 1.35; }
+.side h2 { margin: 0; font-size: .95rem; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side h3 { margin: 12px 10px 4px; font-size: .75rem; color: var(--muted); font-weight: 600; }
+.side-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px 6px 10px; border-block-end: 1px solid var(--line); position: sticky; inset-block-start: 0; background: var(--panel); z-index: 1; }
+.pnl { border-block-end: 1px solid var(--line); }
+.pnl > summary { display: flex; align-items: center; gap: 6px; padding: 0 10px; block-size: 24px; cursor: pointer; list-style: none; user-select: none; font-size: .75rem; font-weight: 600; color: var(--muted); background: color-mix(in srgb, var(--fg) 5%, var(--panel)); }
+.pnl > summary::-webkit-details-marker { display: none; }
+.pnl > summary::before { content: ""; inline-size: 0; block-size: 0; border-inline-start: 4px solid transparent; border-inline-end: 4px solid transparent; border-block-start: 5px solid currentColor; transform: rotate(-90deg); transition: transform .1s; }
+.pnl[open] > summary::before { transform: none; }
+.pnl > summary:hover { color: var(--fg); }
+.pnl > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.pnl .cnt { margin-inline-start: auto; font-weight: 500; font-variant-numeric: tabular-nums; }
+.pnl-body { padding: 6px 10px 8px; }
+.props { margin: 0; display: grid; grid-template-columns: 4.2rem 1fr; gap: 2px 8px; }
+.props dt { color: var(--muted); }
+.props dd { margin: 0; overflow-wrap: anywhere; }
+.tools { display: flex; gap: 4px; flex-wrap: wrap; margin-block-start: 6px; }
+.pnl-body > .tools:first-child { margin-block-start: 0; }
+.side .linklist { gap: 0; }
+.lrow { display: flex; align-items: center; gap: 4px; min-block-size: 24px; }
+.lrow .link { flex: 1 1 auto; min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side .btn.small, .side .sel { min-block-size: 22px; min-inline-size: 22px; padding: 0 7px; font-size: .75rem; border-radius: 4px; }
+.side .sel { border: 1px solid var(--line); background: var(--bg); color: var(--fg); font-family: inherit; inline-size: 6.2rem; }
+.side .btn.tiny { min-block-size: 22px; min-inline-size: 22px; inline-size: 22px; border-radius: 4px; padding: 0; line-height: 1; }
+.btn.danger-ghost { color: var(--danger); border-color: transparent; background: none; }
+.btn.danger-ghost:hover { border-color: var(--danger); }
+.side .warn { margin: 6px 10px 0; }
 .linklist { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; }
-.linklist button.link { background: none; border: 0; color: var(--accent); cursor: pointer; font: inherit; padding: 6px 2px; min-block-size: 44px; text-align: start; }
+.linklist button.link { background: none; border: 0; color: var(--accent); cursor: pointer; font: inherit; padding: 2px 2px; min-block-size: 24px; text-align: start; }
 
 .screen { position: absolute; inset: 0; overflow: auto; padding: 16px; background: var(--bg); }
 .screen-head { display: flex; gap: 10px; margin-block-end: 12px; }
