@@ -275,8 +275,10 @@
   "search.literal_short": "Exact text",
   "view.engine": "Layout engine",
   "engine.own": "Built in",
-  "engine.dot": "Graphviz dot (as the original)",
+  "engine.port": "Graphviz layout (built in)",
+  "engine.dot": "Graphviz dot program (as the original)",
+  "engine.used_port": "Order made by the built-in port of Graphviz's layout.",
   "engine.used_dot": "Order made by Graphviz dot.",
-  "engine.waiting": "Showing the built-in order while Graphviz works.",
-  "engine.fallback": "Graphviz dot not used ({why}); showing the built-in order."
+  "engine.waiting": "Showing the quick order while the Graphviz layout is made.",
+  "engine.fallback": "Graphviz layout not used ({why}); showing the built-in order."
 }

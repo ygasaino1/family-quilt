@@ -404,6 +404,27 @@ try {
     await page.keyboard.press('Escape');
   });
 
+  await check('the built-in Graphviz layout needs no program, and the geometry rules still hold', async () => {
+    if (await page.locator('#engine-mode').isHidden()) await page.click('#view-btn');
+    await page.selectOption('#engine-mode', 'port');
+    await page.waitForFunction(() => document.getElementById('strip').hidden && window.__app.view.q.payload.layout === 'full' && !window.__app.view.anim, null, { timeout: 30000 });
+    const r = await page.evaluate(() => ({ engine: window.__app.view.q.payload.engine, note: document.getElementById('engine-note').textContent, n: window.__app.view.q.n }));
+    assert.equal(r.engine, 'port');
+    assert.ok(r.note.length > 0, 'the View menu says which engine made the order');
+    const bad = await page.evaluate(() => {
+      const v = window.__app.view; const q = v.q; const g = v.geo; const out = [];
+      q.cols.forEach((col, j) => {
+        for (const x of col.p) if (!(g.chy[j] >= g.ry[x] + 20)) out.push('header above parent ' + x);
+        for (const c of col.c) if (!(g.chy[j] + 20 <= g.ry[c.r])) out.push('header below child ' + c.r);
+      });
+      return out;
+    });
+    assert.deepEqual(bad, []);
+    await page.selectOption('#engine-mode', 'own');
+    await page.waitForFunction(() => window.__app.view.q.payload.engine === 'own');
+    await page.keyboard.press('Escape');
+  });
+
   await check('dark theme renders and differs from light', async () => {
     await page.click('#nav-quilt');
     await page.emulateMedia({ colorScheme: 'dark' });

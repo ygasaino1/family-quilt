@@ -38,7 +38,8 @@ let lastDataKey = null;
 let firstLoad = true;
 
 function engineQuery() {
-  return pref('engine') === 'dot' ? '&engine=dot' : '';
+  const e = pref('engine');
+  return e === 'dot' || e === 'port' ? `&engine=${e}` : '';
 }
 
 function modeQuery() {
@@ -66,8 +67,9 @@ function applyPayload(p, opts) {
 function showEngine(engine) {
   const note = $('engine-note');
   if (!note) return;
-  if (pref('engine') !== 'dot') note.textContent = '';
-  else if (engine === 'dot') note.textContent = t('engine.used_dot');
+  const want = pref('engine');
+  if (want !== 'dot' && want !== 'port') note.textContent = '';
+  else if (engine === want) note.textContent = t(want === 'port' ? 'engine.used_port' : 'engine.used_dot');
   else if (typeof engine === 'string' && engine.startsWith('own (')) note.textContent = t('engine.fallback', { why: engine.slice(5, -1) });
   else note.textContent = t('engine.waiting');
 }

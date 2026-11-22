@@ -45,16 +45,43 @@ pub fn find_dot() -> Option<PathBuf> {
     std::env::var_os("PATH").and_then(|paths| std::env::split_paths(&paths).map(|d| d.join(&name)).find(|c| c.is_file()))
 }
 
-/// The graph as the original writes it. Node names are plain numbers: `p<person>` and `f<family>`.
-pub fn dot_source(families: &[FamilyIn]) -> String {
-    let mut s = String::from("digraph genealogy {\nranksep=1;\nnode [shape=point,width=0,height=0,label=\"\"];\nedge [style=invis];\n");
+/// The edges the original writes, in its order: it walks the people and for each one adds the edge
+/// person -> the family it is a child of, then family -> person for every family it is a parent of.
+/// Numbers: person `p` is `p`, family `j` is `people + j`. (The original's own order is whatever its Java hash
+/// map gives, so no order of ours can claim to be "the" original order; this one has the same shape.)
+pub fn graph_edges(people: usize, families: &[FamilyIn]) -> Vec<(u32, u32)> {
+    let mut child_of: Vec<Vec<u32>> = vec![Vec::new(); people];
+    let mut parent_in: Vec<Vec<u32>> = vec![Vec::new(); people];
     for (j, f) in families.iter().enumerate() {
-        for c in &f.children {
-            s.push_str(&format!("\"p{c}\"->\"f{j}\";\n"));
+        for &c in &f.children {
+            if !child_of[c as usize].contains(&(j as u32)) {
+                child_of[c as usize].push(j as u32);
+            }
         }
-        for p in &f.parents {
-            s.push_str(&format!("\"f{j}\"->\"p{p}\";\n"));
+        for &p in &f.parents {
+            if !parent_in[p as usize].contains(&(j as u32)) {
+                parent_in[p as usize].push(j as u32);
+            }
         }
+    }
+    let mut edges = Vec::new();
+    for p in 0..people {
+        for &j in &child_of[p] {
+            edges.push((p as u32, (people as u32) + j));
+        }
+        for &j in &parent_in[p] {
+            edges.push(((people as u32) + j, p as u32));
+        }
+    }
+    edges
+}
+
+/// The graph as the original writes it. Node names are plain numbers: `p<person>` and `f<family>`.
+pub fn dot_source(people: usize, families: &[FamilyIn]) -> String {
+    let name = |v: u32| if (v as usize) < people { format!("p{v}") } else { format!("f{}", v as usize - people) };
+    let mut s = String::from("digraph genealogy {\nranksep=1;\nnode [shape=point,width=0,height=0,label=\"\"];\nedge [style=invis];\n");
+    for (a, b) in graph_edges(people, families) {
+        s.push_str(&format!("\"{}\"->\"{}\";\n", name(a), name(b)));
     }
     s.push_str("}\n");
     s
@@ -113,40 +140,92 @@ fn run_dot(program: &Path, source: String, sink: &mut dyn Sink) -> Result<Option
     Ok(Some(nodes))
 }
 
+/// Where an engine put every person (`p_*`; layer -1 = in no family) and every family (`f_*`): the layer
+/// (0 = oldest) and the x that orders the nodes of one layer.
+struct Placement {
+    p_layer: Vec<i32>,
+    p_x: Vec<f64>,
+    f_layer: Vec<i32>,
+    f_x: Vec<f64>,
+}
+
 /// Lay out with `dot`. Same output shape as the built-in engine. `Err` = could not use dot (the caller
 /// falls back); `Ok(None)` = cancelled.
-///
-/// Generations follow the original: `layer / 2` for both people and families, so a person on an odd
-/// layer (a long edge) shares a block with the people on the even layer before it. In our units one
-/// generation is two layers: people are `2 * (layer / 2)`, families `2 * (layer / 2) + 1`.
 pub fn layout_with_dot(people: usize, tiebreak: &[i64], families: &[FamilyIn], options: &Options, program: &Path, sink: &mut dyn Sink) -> Result<Option<Layout>, String> {
     let nf = families.len();
-    if families.iter().any(|f| f.parents.is_empty()) {
-        return Err("a family without parents (not supported in dot mode)".into());
-    }
-    let Some(placed) = run_dot(program, dot_source(families), sink)? else { return Ok(None) };
+    let Some(placed) = run_dot(program, dot_source(people, families), sink)? else { return Ok(None) };
 
     // layer = index of the node's y among the sorted distinct y values (smallest y = oldest ancestors)
     let mut ys: Vec<f64> = placed.values().map(|p| p.y).collect();
     ys.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     ys.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
     let layer_of = |y: f64| ys.iter().position(|v| (*v - y).abs() < 1e-6).unwrap_or(0) as i32;
-    let mut p_layer = vec![-1i32; people];
-    let mut p_x = vec![0f64; people];
-    let mut f_layer = vec![0i32; nf];
-    let mut f_x = vec![0f64; nf];
-    for (p, (l, x)) in p_layer.iter_mut().zip(p_x.iter_mut()).enumerate() {
+    let mut pl = Placement { p_layer: vec![-1; people], p_x: vec![0.0; people], f_layer: vec![0; nf], f_x: vec![0.0; nf] };
+    for p in 0..people {
         if let Some(n) = placed.get(&format!("p{p}")) {
-            *l = layer_of(n.y);
-            *x = n.x;
+            pl.p_layer[p] = layer_of(n.y);
+            pl.p_x[p] = n.x;
         }
     }
-    for (f, (l, x)) in f_layer.iter_mut().zip(f_x.iter_mut()).enumerate() {
+    for f in 0..nf {
         let n = placed.get(&format!("f{f}")).ok_or_else(|| format!("dot did not place family {f}"))?;
-        *l = layer_of(n.y);
-        *x = n.x;
+        pl.f_layer[f] = layer_of(n.y);
+        pl.f_x[f] = n.x;
     }
+    finish(people, tiebreak, families, options, pl, sink)
+}
 
+/// Lay out with our own port of dot's ranking and ordering ([`crate::dotrank`], [`crate::dotorder`]): the same
+/// layers and the same order inside them as `dot` gives, with nothing to install. `Ok(None)` = cancelled.
+pub fn layout_with_port(people: usize, tiebreak: &[i64], families: &[FamilyIn], options: &Options, sink: &mut dyn Sink) -> Result<Option<Layout>, String> {
+    let nf = families.len();
+    let edges = graph_edges(people, families);
+    // number the nodes in the order of first mention, as dot creates them
+    let mut node_of: Vec<u32> = vec![u32::MAX; people + nf];
+    let mut graph_id: Vec<u32> = Vec::new();
+    let mut local: Vec<(u32, u32)> = Vec::with_capacity(edges.len());
+    for &(a, b) in &edges {
+        for v in [a, b] {
+            if node_of[v as usize] == u32::MAX {
+                node_of[v as usize] = graph_id.len() as u32;
+                graph_id.push(v);
+            }
+        }
+        local.push((node_of[a as usize], node_of[b as usize]));
+    }
+    if !sink.report(Progress { stage: Stage::Ranking, fraction: 0.1, score: None, snapshot: None }) {
+        return Ok(None);
+    }
+    let l = crate::dotorder::layout_nodes(graph_id.len(), &local);
+    // dot's rank 0 is the top (the youngest here); layer 0 is the oldest, as with `-Tplain` y sorted upwards
+    let maxrank = l.rank.iter().copied().max().unwrap_or(0);
+    let mut pl = Placement { p_layer: vec![-1; people], p_x: vec![0.0; people], f_layer: vec![0; nf], f_x: vec![0.0; nf] };
+    for p in 0..people {
+        let n = node_of[p];
+        if n != u32::MAX {
+            pl.p_layer[p] = maxrank - l.rank[n as usize];
+            pl.p_x[p] = f64::from(l.pos[n as usize]);
+        }
+    }
+    for f in 0..nf {
+        let n = node_of[people + f];
+        if n == u32::MAX {
+            return Err(format!("family {f} has no members"));
+        }
+        pl.f_layer[f] = maxrank - l.rank[n as usize];
+        pl.f_x[f] = f64::from(l.pos[n as usize]);
+    }
+    finish(people, tiebreak, families, options, pl, sink)
+}
+
+/// Everything after the placement, shared by both engines: trees, generations, rows and columns, score.
+///
+/// Generations follow the original: `layer / 2` for both people and families, so a person on an odd
+/// layer (a long edge) shares a block with the people on the even layer before it. In our units one
+/// generation is two layers: people are `2 * (layer / 2)`, families `2 * (layer / 2) + 1`.
+fn finish(people: usize, tiebreak: &[i64], families: &[FamilyIn], options: &Options, pl: Placement, sink: &mut dyn Sink) -> Result<Option<Layout>, String> {
+    let nf = families.len();
+    let Placement { mut p_layer, p_x, mut f_layer, f_x } = pl;
     // Connected trees (everyone in a family is joined), largest first, as the built-in engine numbers them.
     let mut uf: Vec<u32> = (0..people as u32).collect();
     for f in families {
@@ -169,7 +248,7 @@ pub fn layout_with_dot(people: usize, tiebreak: &[i64], families: &[FamilyIn], o
     let mut trees: Vec<u32> = size.keys().copied().collect();
     trees.sort_by_key(|r| (std::cmp::Reverse(size[r]), *r));
     let tree_no: HashMap<u32, u32> = trees.iter().enumerate().map(|(i, r)| (*r, i as u32)).collect();
-    let fam_root = |f: usize| root[families[f].parents[0] as usize];
+    let fam_root = |f: usize| root[*families[f].parents.first().or(families[f].children.first()).expect("a placed family has members") as usize];
 
     // fixLayers: with several trees, a tree whose deepest node is of the other kind than the deepest
     // tree's is moved one layer up, so people line up with people.
@@ -206,13 +285,17 @@ pub fn layout_with_dot(people: usize, tiebreak: &[i64], families: &[FamilyIn], o
 
     // generations in our units (see above). A shifted layer may be -1: the original clamps it to 0.
     let half = |l: i32| (l / 2).max(0) as u32;
+    // familyFirst: when layer 0 holds families and no person (a family without parents), the diagonal starts with a
+    // block of columns, so the parity flips: families are even generations, people odd.
+    let family_first = f_layer.contains(&0) && !p_layer.contains(&0);
+    let (pg, fg) = if family_first { (1u32, 0u32) } else { (0, 1) };
     let mut out = Layout { person_gen: vec![0; people], family_gen: vec![0; nf], person_tree: vec![0; people], family_tree: vec![0; nf], ..Default::default() };
     let n_trees = trees.len() as u32;
     let mut singles: Vec<u32> = (0..people as u32).filter(|&p| !linked_person[p as usize]).collect();
     singles.sort_by_key(|&p| (tiebreak[p as usize], p));
     for p in 0..people {
         if linked_person[p] {
-            out.person_gen[p] = 2 * half(p_layer[p]);
+            out.person_gen[p] = 2 * half(p_layer[p]) + pg;
             out.person_tree[p] = tree_no[&root[p]];
         }
     }
@@ -220,7 +303,7 @@ pub fn layout_with_dot(people: usize, tiebreak: &[i64], families: &[FamilyIn], o
         out.person_tree[p as usize] = n_trees + i as u32;
     }
     for f in 0..nf {
-        out.family_gen[f] = 2 * half(f_layer[f]) + 1;
+        out.family_gen[f] = 2 * half(f_layer[f]) + fg;
         out.family_tree[f] = tree_no[&fam_root(f)];
     }
     // Tree by tree: each tree starts at generation 0 of its own.
@@ -233,13 +316,17 @@ pub fn layout_with_dot(people: usize, tiebreak: &[i64], families: &[FamilyIn], o
                 min_gen[t] = min_gen[t].min(out.person_gen[p]);
             }
         }
+        for f in 0..nf {
+            let t = out.family_tree[f] as usize;
+            min_gen[t] = min_gen[t].min(out.family_gen[f]);
+        }
         for p in 0..people {
             if linked_person[p] {
                 out.person_gen[p] -= min_gen[out.person_tree[p] as usize];
             }
         }
         for f in 0..nf {
-            out.family_gen[f] = out.family_gen[f].saturating_sub(min_gen[out.family_tree[f] as usize]);
+            out.family_gen[f] -= min_gen[out.family_tree[f] as usize];
         }
     }
 
@@ -290,7 +377,7 @@ mod tests {
 
     #[test]
     fn source_is_the_originals_graph() {
-        let s = dot_source(&[fam(&[0, 1], &[2])]);
+        let s = dot_source(3, &[fam(&[0, 1], &[2])]);
         assert!(s.contains("\"p2\"->\"f0\""));
         assert!(s.contains("\"f0\"->\"p0\""));
         assert!(s.contains("\"f0\"->\"p1\""));
@@ -310,6 +397,39 @@ mod tests {
         // parents sit in an earlier generation than their children, the family in between
         assert!(l.person_gen[0] < l.family_gen[0] && l.family_gen[0] < l.person_gen[2]);
         assert!(l.person_gen[2] < l.family_gen[1] && l.family_gen[1] < l.person_gen[5]);
+    }
+
+    #[test]
+    fn the_port_lays_out_without_any_program() {
+        let fams = vec![fam(&[0, 1], &[2, 3]), fam(&[2, 4], &[5])];
+        let tb = vec![i64::MAX; 7];
+        let l = layout_with_port(7, &tb, &fams, &Options::default(), &mut |_: Progress| true).unwrap().unwrap();
+        assert_eq!(*l.rows.last().unwrap(), 6);
+        assert_eq!((l.rows.len(), l.cols.len()), (7, 2));
+        assert!(l.person_gen[0] < l.family_gen[0] && l.family_gen[0] < l.person_gen[2]);
+        assert!(l.person_gen[2] < l.family_gen[1] && l.family_gen[1] < l.person_gen[5]);
+    }
+
+    #[test]
+    fn the_port_agrees_with_dot_when_dot_is_present() {
+        let Some(dot) = find_dot() else { return };
+        // two trees, a long edge (grandparent -> grandchild through a skipped generation), a single person
+        let fams = vec![fam(&[0, 1], &[2, 3]), fam(&[2, 4], &[5, 6]), fam(&[3, 7], &[8]), fam(&[9, 10], &[11]), fam(&[0], &[6])];
+        let tb = vec![i64::MAX; 13];
+        let a = layout_with_port(13, &tb, &fams, &Options::default(), &mut |_: Progress| true).unwrap().unwrap();
+        let b = layout_with_dot(13, &tb, &fams, &Options::default(), &dot, &mut |_: Progress| true).unwrap().unwrap();
+        assert_eq!(a.rows, b.rows);
+        assert_eq!(a.cols, b.cols);
+        assert_eq!(a.person_gen, b.person_gen);
+    }
+
+    #[test]
+    fn a_family_without_parents_comes_first_in_the_diagonal() {
+        let fams = vec![fam(&[], &[0, 1]), fam(&[0, 2], &[3])];
+        let tb = vec![i64::MAX; 4];
+        let l = layout_with_port(4, &tb, &fams, &Options::default(), &mut |_: Progress| true).unwrap().unwrap();
+        assert!(l.family_gen[0] < l.person_gen[0], "the orphan family is before its children");
+        assert!(l.person_gen[0] < l.family_gen[1] && l.family_gen[1] < l.person_gen[3]);
     }
 
     #[test]

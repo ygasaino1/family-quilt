@@ -11,3 +11,6 @@ in a header of each ported file, in the app's About/Licenses screen and in the R
   https://github.com/jdfekete/geneaquilt  (redistribution conditions and
   disclaimer reproduced verbatim from that file; the names INRIA and the authors
   may not be used to endorse or promote this product).
+
+Graphviz (https://graphviz.org), Eclipse Public License 1.0: the layout code in crates/layout/src/dotrank.rs and
+crates/layout/src/dotorder.rs is a Rust port of Graphviz's dot ranking and ordering (lib/dotgen, lib/common/ns.c), 16.1.2.

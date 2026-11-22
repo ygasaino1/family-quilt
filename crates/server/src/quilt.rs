@@ -15,7 +15,7 @@ use axum::extract::{Query, State};
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use family_families::{derive_families, Derived};
-use family_layout::dot::{find_dot, layout_with_dot};
+use family_layout::dot::{find_dot, layout_with_dot, layout_with_port};
 use family_layout::{input_from_derived, layout_with_progress, Align, Effort, Hint, Layout, Mode, Options, Progress, Sink, Snapshot, Stage};
 use family_store::{AccessContext, Graph, GraphFilter, GraphLink, GraphPerson, RelType};
 use serde::Deserialize;
@@ -68,7 +68,28 @@ struct Job {
     graph: Arc<(Graph, Derived)>,
     quick: Layout,
     mode: Mode,
-    dot: bool,
+    engine: Eng,
+}
+
+/// Which layout engine was asked for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Eng {
+    /// The built-in annealing engine.
+    Own,
+    /// The original's engine: the external Graphviz `dot`, if it can be found.
+    Dot,
+    /// Our own port of dot's ranking and ordering: dot's layout with nothing to install.
+    Port,
+}
+
+impl Eng {
+    fn label(self) -> &'static str {
+        match self {
+            Eng::Own => "own",
+            Eng::Dot => "dot",
+            Eng::Port => "port",
+        }
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -78,7 +99,7 @@ pub struct QuiltQuery {
     pub review: Option<String>,
     pub live: Option<u8>,
     pub snapshot: Option<u8>,
-    /// `dot` = the original's engine (Graphviz), used if it can be found; anything else = built-in.
+    /// `port` = our port of dot; `dot` = the external Graphviz, used if it can be found; anything else = built-in.
     pub engine: Option<String>,
 }
 
@@ -90,12 +111,25 @@ fn mode_of(q: &QuiltQuery) -> Mode {
     }
 }
 
-fn wants_dot(engine: &Option<String>) -> bool {
-    engine.as_deref() == Some("dot")
+fn engine_of(engine: &Option<String>) -> Eng {
+    match engine.as_deref() {
+        Some("dot") => Eng::Dot,
+        Some("port") => Eng::Port,
+        _ => Eng::Own,
+    }
+}
+
+fn slot_name_of(engine: &Option<String>, mode: &Option<String>, pending: Option<u8>) -> String {
+    let prefix = match engine_of(engine) {
+        Eng::Own => "",
+        Eng::Dot => "dot-",
+        Eng::Port => "port-",
+    };
+    format!("{prefix}{}-{}", mode.as_deref().unwrap_or("tree"), pending.unwrap_or(1))
 }
 
 fn slot_name(q: &QuiltQuery) -> String {
-    format!("{}{}-{}", if wants_dot(&q.engine) { "dot-" } else { "" }, q.mode.as_deref().unwrap_or("tree"), q.pending.unwrap_or(1))
+    slot_name_of(&q.engine, &q.mode, q.pending)
 }
 
 fn family_key(g: &Graph, parents: &[u32]) -> String {
@@ -311,8 +345,8 @@ fn quilt_sync(st: &Shared, q: &QuiltQuery) -> Result<Response, ApiError> {
     }
     let pending = q.pending.unwrap_or(1) == 1;
     let name = slot_name(q);
-    let want_dot = wants_dot(&q.engine);
-    let engine_label = if want_dot { "dot" } else { "own" };
+    let eng = engine_of(&q.engine);
+    let engine_label = eng.label();
     let key = lock_store(st).data_key(&CTX)?;
     let mut state = st.quilt.lock().unwrap_or_else(|e| e.into_inner());
     let slot = state.slots.entry(name.clone()).or_default();
@@ -373,7 +407,7 @@ fn quilt_sync(st: &Shared, q: &QuiltQuery) -> Result<Response, ApiError> {
         graph: Arc::new((g, d)),
         quick: quick.clone(),
         mode,
-        dot: want_dot,
+        engine: eng,
     });
     let body = Arc::new(body);
     slot.entry = Some(Entry { key: key.clone(), full: false, body: body.clone(), rows, cols, engine: "own".into() });
@@ -391,8 +425,18 @@ fn run_job(st: Shared, name: String, job: Arc<Job>, hint: Option<Hint>, fams: Ve
     let mut engine = String::from("own");
     let mut result = None;
     let mut tried_dot = false;
-    if job.dot {
-        match find_dot() {
+    match job.engine {
+        Eng::Own => {}
+        Eng::Port => match layout_with_port(g.people.len(), &tb, &fams, &opts, &mut sink) {
+            Ok(Some(l)) => {
+                engine = "port".into();
+                result = Some(l);
+                tried_dot = true;
+            }
+            Ok(None) => tried_dot = true, // cancelled
+            Err(why) => engine = format!("own (port unavailable: {why})"),
+        },
+        Eng::Dot => match find_dot() {
             None => engine = "own (dot not found)".into(),
             Some(program) => match layout_with_dot(g.people.len(), &tb, &fams, &opts, &program, &mut sink) {
                 Ok(Some(l)) => {
@@ -403,7 +447,7 @@ fn run_job(st: Shared, name: String, job: Arc<Job>, hint: Option<Hint>, fams: Ve
                 Ok(None) => tried_dot = true, // cancelled
                 Err(why) => engine = format!("own (dot unavailable: {why})"),
             },
-        }
+        },
     }
     if result.is_none() && !(tried_dot && job.cancel.load(Ordering::Relaxed)) {
         result = layout_with_progress(g.people.len(), &tb, &fams, &opts, hint.as_ref(), Effort::Full, &mut sink);
@@ -421,7 +465,7 @@ fn run_job(st: Shared, name: String, job: Arc<Job>, hint: Option<Hint>, fams: Ve
     let slot = state.slots.entry(name.clone()).or_default();
     // Only if the data did not change meanwhile.
     if slot.job.as_ref().is_some_and(|j| Arc::ptr_eq(j, &job)) {
-        if body.len() <= CACHE_MAX_BYTES && (!job.dot || engine == "dot") {
+        if body.len() <= CACHE_MAX_BYTES && (job.engine == Eng::Own || engine == job.engine.label()) {
             let _ = lock_store(&st).meta_set(&CTX, &format!("layout_cache:{name}"), &format!("{}\n{}", job.key, body));
         }
         slot.entry = Some(Entry { key: job.key.clone(), full: true, body: Arc::new(body), rows, cols, engine });
@@ -436,7 +480,7 @@ pub struct ProgressQuery {
 }
 
 pub async fn progress(State(st): State<Shared>, Query(q): Query<ProgressQuery>) -> Result<Response, ApiError> {
-    let name = format!("{}{}-{}", if wants_dot(&q.engine) { "dot-" } else { "" }, q.mode.as_deref().unwrap_or("tree"), q.pending.unwrap_or(1));
+    let name = slot_name_of(&q.engine, &q.mode, q.pending);
     let key = lock_store(&st).data_key(&CTX)?;
     let state = st.quilt.lock().unwrap_or_else(|e| e.into_inner());
     let slot = state.slots.get(&name);

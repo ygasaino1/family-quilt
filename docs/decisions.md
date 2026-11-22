@@ -130,3 +130,31 @@ Phase 1 needs crates.io. Network for package installs was blocked in the Phase 0
 **Performance (10,115 people, 4,800 columns).** In headless Chromium (software rendering, so conservative for a real GPU): 59-60 frames/s while panning at four zoom levels, 0.1-0.5 ms of drawing per frame, zoom steps under 2 ms. Quick layout 0.6 s (debug build); the GEDCOM import took 9.9 s in a debug build. Not yet measured on Windows/WebView2.
 
 **Not done in this phase (Phase 6 or later).** The window itself (wry), quit-with-confirm, first-run wizard, password unlock screen, automatic backups, packaging; the custom-protocol transport (hybrid decision); selecting people with the keyboard alone (arrows pan, `+`/`-`/`0` zoom, search + Enter selects, but there is no row-by-row keyboard focus yet); a text-size test beyond the setting itself.
+
+## Layout engines: the Graphviz layout, built in (2026-11-22)
+
+The original GeneaQuilts gets its layers and its order inside each layer from Graphviz `dot`. Ours looked less neat, so
+we ported the two stages that matter, from the Graphviz 16.1.2 sources, into Rust (no program to install):
+
+* `crates/layout/src/dotrank.rs`: class1, decompose, acyclic, network simplex (feasible tree, cut values, pivots) and
+  the top-bottom balance; this fixes each node's layer.
+* `crates/layout/src/dotorder.rs`: class2 (virtual node chains), build_ranks, weighted medians, reorder, transpose and
+  the merge of connected components; this fixes the order inside each layer.
+
+Only what the quilt needs is ported (plain nodes, no clusters, ports, labels or flat edges); splines and the x
+coordinates are not needed because the original only reads the layer and the order.
+
+* **Verified against `dot` 16.1.2** (built from the same sources): identical layers and identical order in every layer on the
+  Greek gods file, 800 random graphs (cycles, duplicate edges, several components) and a generated 5,600-node
+  genealogy. Developer tool: `cargo run -p family-layout --example dotrank_cmp -- FILE.dot`.
+* One detail that matters: cgraph keeps a node's out-edges ordered by the *head's* creation number first, then by the
+  edge's. Getting this wrong changed ties in a third of the random graphs.
+* Edge order: the original's own order depends on a Java hash map, so there is no "the original order" to copy. We
+  write the edges in the original's shape (per person: the edge to its parent family, then the edges from the
+  families it is a parent of), people in our order.
+* A family without parents is handled as in the original (`familyFirst`): the diagonal starts with a block of columns.
+* Engines in the View menu: *Built in* (annealing, the default for now), *Graphviz layout (built in)* (`engine=port`),
+  and *Graphviz dot program* (`engine=dot`, optional, only when a `dot` is found). Both Graphviz engines fall back to
+  the built-in one when they cannot be used. Making the Graphviz layout the default waits for the user's review.
+* Licence: Graphviz is distributed under the Eclipse Public License 1.0. The port is derived work, so it is credited in
+  `NOTICE` and the module headers; the EPL terms have to be checked before release.
