@@ -181,3 +181,12 @@ tells us when upstream changes the C files we actually ported, so the port canno
 - Limits: path-based monitoring flags harmless refactors too (a human decides); the workflow was tested locally only,
   not against the real GitLab (the sandbox cannot reach it). The tag may be an annotated tag object, so the check
   resolves it with `COMMIT^{commit}`.
+
+### Size cutoff for the Graphviz layout (2026-11-23)
+
+Measured in a release build: the port's ordering stage grows much faster than the file (about 5 s at 10k people,
+18 s at 18k, 28 s at 21k, minutes at 36k); real `dot` is 3-4x slower still (23 s at 10k, 67 s at 18k). The algorithm
+is the cause, not the port. Above 15,000 people (`FAMILY_PORT_AUTO_MAX` overrides, used by the tests) the server does
+not start it on its own: the quick layout, then the built-in careful layout, are made as usual and the View menu says
+so and offers "Run the Graphviz layout anyway" (`force=1`, kept until the engine is changed). The external `dot`
+engine is an explicit choice and is not limited.

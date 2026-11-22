@@ -15,7 +15,7 @@ fs.mkdirSync(out, { recursive: true });
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fq-e2e-'));
 const port = 20000 + Math.floor(Math.random() * 20000);
 const base = `http://127.0.0.1:${port}`;
-const srv = spawn(exe, ['--data', dir, '--port', String(port)], { stdio: ['ignore', 'ignore', 'pipe'] });
+const srv = spawn(exe, ['--data', dir, '--port', String(port)], { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, FAMILY_PORT_AUTO_MAX: '300' } });
 let srvLog = '';
 srv.stderr.on('data', (d) => (srvLog += d));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -408,10 +408,28 @@ try {
     await page.keyboard.press('Escape');
   });
 
+  await check('on a large file the Graphviz layout is not started on its own, but can be asked for', async () => {
+    if (await page.locator('#engine-mode').isHidden()) await page.click('#view-btn');
+    await page.selectOption('#engine-mode', 'port');
+    await page.waitForFunction(() => document.getElementById('strip').hidden && window.__app.view.q.payload.layout === 'full' && !window.__app.view.anim, null, { timeout: 60000 });
+    const r = await page.evaluate(() => ({ engine: window.__app.view.q.payload.engine, n: window.__app.view.q.n, btn: !document.getElementById('engine-force').hidden, note: document.getElementById('engine-note').textContent }));
+    assert.ok(r.n > 300, 'the test needs more people than the cutoff: ' + r.n);
+    assert.ok(r.engine.startsWith('own (large file'), r.engine);
+    assert.ok(r.btn && r.note.includes('Large file'), 'the View menu offers the Graphviz layout');
+    await page.click('#engine-force');
+    await page.waitForFunction(() => document.getElementById('strip').hidden && window.__app.view.q.payload.layout === 'full' && window.__app.view.q.payload.engine === 'port' && !window.__app.view.anim, null, { timeout: 120000 });
+    assert.ok(await page.locator('#engine-force').isHidden());
+    await page.selectOption('#engine-mode', 'own');
+    await page.waitForFunction(() => window.__app.view.q.payload.engine === 'own');
+    await page.keyboard.press('Escape');
+  });
+
   await check('the built-in Graphviz layout needs no program, and the geometry rules still hold', async () => {
     if (await page.locator('#engine-mode').isHidden()) await page.click('#view-btn');
     await page.selectOption('#engine-mode', 'port');
-    await page.waitForFunction(() => document.getElementById('strip').hidden && window.__app.view.q.payload.layout === 'full' && !window.__app.view.anim, null, { timeout: 30000 });
+    await page.waitForFunction(() => !document.getElementById('engine-force').hidden, null, { timeout: 30000 }); // the file is above the test's cutoff
+    await page.click('#engine-force');
+    await page.waitForFunction(() => document.getElementById('strip').hidden && window.__app.view.q.payload.layout === 'full' && window.__app.view.q.payload.engine === 'port' && !window.__app.view.anim, null, { timeout: 60000 });
     const r = await page.evaluate(() => ({ engine: window.__app.view.q.payload.engine, note: document.getElementById('engine-note').textContent, n: window.__app.view.q.n }));
     assert.equal(r.engine, 'port');
     assert.ok(r.note.length > 0, 'the View menu says which engine made the order');

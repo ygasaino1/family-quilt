@@ -37,8 +37,12 @@ let cancelled = false;
 let lastDataKey = null;
 let firstLoad = true;
 
+/** Set by "Run the Graphviz layout anyway" on a large file; lasts until the engine is changed. */
+let forcePort = false;
+
 function engineQuery() {
   const e = pref('engine');
+  if (e === 'port' && forcePort) return '&engine=port&force=1';
   return e === 'dot' || e === 'port' ? `&engine=${e}` : '';
 }
 
@@ -68,7 +72,10 @@ function showEngine(engine) {
   const note = $('engine-note');
   if (!note) return;
   const want = pref('engine');
+  const big = $('engine-force');
+  if (big) big.hidden = !(want === 'port' && typeof engine === 'string' && engine.startsWith('own (large file'));
   if (want !== 'dot' && want !== 'port') note.textContent = '';
+  else if (big && !big.hidden) note.textContent = t('engine.large', { why: engine.slice(5, -1) });
   else if (engine === want) note.textContent = t(want === 'port' ? 'engine.used_port' : 'engine.used_dot');
   else if (typeof engine === 'string' && engine.startsWith('own (')) note.textContent = t('engine.fallback', { why: engine.slice(5, -1) });
   else note.textContent = t('engine.waiting');
@@ -298,6 +305,11 @@ function bindToolbar() {
   $('engine-mode').value = pref('engine');
   $('engine-mode').addEventListener('change', async () => {
     setPref('engine', $('engine-mode').value);
+    forcePort = false;
+    await reload({ glide: true });
+  });
+  $('engine-force').addEventListener('click', async () => {
+    forcePort = true;
     await reload({ glide: true });
   });
   $('layout-mode').value = pref('layout');

@@ -69,6 +69,8 @@ struct Job {
     quick: Layout,
     mode: Mode,
     engine: Eng,
+    /// The person asked for the Graphviz layout even though the file is large.
+    force: bool,
 }
 
 /// Which layout engine was asked for.
@@ -101,6 +103,15 @@ pub struct QuiltQuery {
     pub snapshot: Option<u8>,
     /// `port` = our port of dot; `dot` = the external Graphviz, used if it can be found; anything else = built-in.
     pub engine: Option<String>,
+    /// `1` = run the Graphviz layout even on a large file (otherwise it is only run up to `port_auto_max()` people).
+    pub force: Option<u8>,
+}
+
+/// Above this many people the Graphviz layout is not started on its own: its ordering stage grows much faster than
+/// the file (about 5 s at 10k people, 18 s at 18k, minutes beyond; real dot is slower still), so the built-in
+/// order is made instead and the person can ask for the Graphviz layout explicitly.
+fn port_auto_max() -> usize {
+    std::env::var("FAMILY_PORT_AUTO_MAX").ok().and_then(|v| v.parse().ok()).unwrap_or(15_000)
 }
 
 fn mode_of(q: &QuiltQuery) -> Mode {
@@ -119,17 +130,18 @@ fn engine_of(engine: &Option<String>) -> Eng {
     }
 }
 
-fn slot_name_of(engine: &Option<String>, mode: &Option<String>, pending: Option<u8>) -> String {
+fn slot_name_of(engine: &Option<String>, mode: &Option<String>, pending: Option<u8>, force: Option<u8>) -> String {
     let prefix = match engine_of(engine) {
         Eng::Own => "",
         Eng::Dot => "dot-",
+        Eng::Port if force == Some(1) => "port-all-",
         Eng::Port => "port-",
     };
     format!("{prefix}{}-{}", mode.as_deref().unwrap_or("tree"), pending.unwrap_or(1))
 }
 
 fn slot_name(q: &QuiltQuery) -> String {
-    slot_name_of(&q.engine, &q.mode, q.pending)
+    slot_name_of(&q.engine, &q.mode, q.pending, q.force)
 }
 
 fn family_key(g: &Graph, parents: &[u32]) -> String {
@@ -408,6 +420,7 @@ fn quilt_sync(st: &Shared, q: &QuiltQuery) -> Result<Response, ApiError> {
         quick: quick.clone(),
         mode,
         engine: eng,
+        force: q.force == Some(1),
     });
     let body = Arc::new(body);
     slot.entry = Some(Entry { key: key.clone(), full: false, body: body.clone(), rows, cols, engine: "own".into() });
@@ -427,6 +440,7 @@ fn run_job(st: Shared, name: String, job: Arc<Job>, hint: Option<Hint>, fams: Ve
     let mut tried_dot = false;
     match job.engine {
         Eng::Own => {}
+        Eng::Port if !job.force && g.people.len() > port_auto_max() => engine = format!("own (large file: {} people)", g.people.len()),
         Eng::Port => match layout_with_port(g.people.len(), &tb, &fams, &opts, &mut sink) {
             Ok(Some(l)) => {
                 engine = "port".into();
@@ -477,10 +491,11 @@ pub struct ProgressQuery {
     pub mode: Option<String>,
     pub pending: Option<u8>,
     pub engine: Option<String>,
+    pub force: Option<u8>,
 }
 
 pub async fn progress(State(st): State<Shared>, Query(q): Query<ProgressQuery>) -> Result<Response, ApiError> {
-    let name = slot_name_of(&q.engine, &q.mode, q.pending);
+    let name = slot_name_of(&q.engine, &q.mode, q.pending, q.force);
     let key = lock_store(&st).data_key(&CTX)?;
     let state = st.quilt.lock().unwrap_or_else(|e| e.into_inner());
     let slot = state.slots.get(&name);

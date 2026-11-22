@@ -280,5 +280,7 @@
   "engine.used_port": "Order made by the built-in port of Graphviz's layout.",
   "engine.used_dot": "Order made by Graphviz dot.",
   "engine.waiting": "Showing the quick order while the Graphviz layout is made.",
+  "engine.large": "Large file ({why}): showing the built-in order. The Graphviz layout can take minutes here.",
+  "engine.run_anyway": "Run the Graphviz layout anyway",
   "engine.fallback": "Graphviz layout not used ({why}); showing the built-in order."
 }
