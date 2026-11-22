@@ -6,6 +6,10 @@ import { CW, RH, HH, WORLD_FONT, buildGeometry, floorIndex, blank, blend, mapped
 export { CW, RH, HH };
 
 const FIT_MARGIN = 28;
+// Level of detail by the on-screen width of one column: solid grey generation blocks (as the original), then a faded
+// grid with marks, then everything. Tune by experience.
+const LOD_BLOCKS = 0.6;
+const LOD_GRID = 3;
 const HALF = 7.6; // half the size of a mark: marks nearly fill the crossing of a row and a column
 const MIN_K = 0.002;
 const MAX_K = 8;
@@ -122,6 +126,12 @@ export class QuiltView extends EventTarget {
     this.dirty = true;
     this.emitView();
     this.dispatchEvent(new CustomEvent('quilt'));
+  }
+
+  /** Which level of detail is drawn: 'blocks', 'faded' or 'full'. */
+  lod() {
+    const px = CW * this.tf.k;
+    return px < LOD_BLOCKS ? 'blocks' : px < LOD_GRID ? 'faded' : 'full';
   }
 
   // ---------- view transform ----------
@@ -440,6 +450,24 @@ export class QuiltView extends EventTarget {
     const inY = (a, b) => b >= vis.y0 && a <= vis.y1;
 
     ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * x, dpr * y);
+    if (px < LOD_BLOCKS && !this.anim) {
+      // far out: each run of rows (one generation of a tree) is one solid grey block, as in the original
+      ctx.fillStyle = C.line;
+      ctx.globalAlpha = 0.45;
+      for (let i = r0; i <= r1; i++) {
+        if (g.rrunA[i] !== i) continue;
+        const b = g.rrunB[i];
+        let x0 = Infinity;
+        let x1 = -Infinity;
+        for (let r = i; r <= b; r++) {
+          if (g.rx0[r] < x0) x0 = g.rx0[r];
+          if (g.rx1[r] > x1) x1 = g.rx1[r];
+        }
+        ctx.fillRect(x0, g.ry[i], x1 - x0, g.ry[b] + RH - g.ry[i]);
+      }
+      ctx.globalAlpha = 1;
+      return;
+    }
     // 1. the strips: a row strip spans a person's name and marks, a column strip its header and marks
     ctx.fillStyle = C.cell;
     for (let i = r0; i <= r1; i++) if (inX(g.rx0[i], g.rx1[i])) ctx.fillRect(g.rx0[i], g.ry[i], g.rx1[i] - g.rx0[i], RH);
@@ -471,7 +499,8 @@ export class QuiltView extends EventTarget {
     //    the union of its two neighbours (this is all the original draws; the "cells" are line crossings)
     ctx.strokeStyle = C.line;
     ctx.lineWidth = Math.max(lw(1), 0.3);
-    ctx.globalAlpha = px < 3 ? 0.55 : 1;
+    // zoomed far out the grid would only smear into dark smudges: the strips and marks carry the picture
+    ctx.globalAlpha = px >= LOD_GRID ? 1 : Math.max(0.06, (px - 1) / 8);
     ctx.beginPath();
     for (let i = r0; i <= r1; i++) {
       let xa = g.rx0[i];
@@ -510,7 +539,7 @@ export class QuiltView extends EventTarget {
 
     // 4. header cells (between the parent rows above and the child rows below), then the marks
     if (px >= 1.2) this.drawHeaderBoxes(q, g, c0, c1, vis, lw);
-    if (px >= 1.2) this.drawCells(q, g, c0, c1, r0, r1, px);
+    if (px >= LOD_BLOCKS) this.drawCells(q, g, c0, c1, r0, r1, px);
 
     // 5. text, in screen space
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -563,7 +592,8 @@ export class QuiltView extends EventTarget {
         const my = g.ry[r] + RH / 2;
         if (tiny) {
           ctx.fillStyle = linkPending ? C.pending : C.fg;
-          ctx.fillRect(mx - CW * 0.35, my - RH * 0.35, CW * 0.7, RH * 0.7);
+          const sz = Math.max(CW * 0.7, 1.2 / this.tf.k); // never thinner than a screen pixel
+          ctx.fillRect(mx - sz / 2, my - Math.max(RH * 0.7, 1.2 / this.tf.k) / 2, sz, Math.max(RH * 0.7, 1.2 / this.tf.k));
         } else if (linkPending) links.push([mx, my]);
         else shape(pick(sex, hollow), sex, mx, my, HALF);
       };

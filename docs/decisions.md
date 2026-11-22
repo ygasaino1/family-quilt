@@ -190,3 +190,10 @@ is the cause, not the port. Above 15,000 people (`FAMILY_PORT_AUTO_MAX` override
 not start it on its own: the quick layout, then the built-in careful layout, are made as usual and the View menu says
 so and offers "Run the Graphviz layout anyway" (`force=1`, kept until the engine is changed). The external `dot`
 engine is an explicit choice and is not limited.
+
+### Zoomed-out drawing: a hybrid (2026-11-23)
+
+By the on-screen width of one column (`LOD_BLOCKS` 0.6 px, `LOD_GRID` 3 px in `web/js/view.js`): below 0.6 px each
+generation is one solid grey block (as in the original); up to 3 px the grid fades out and the marks stay (never
+thinner than a screen pixel); above that everything is drawn. This replaces "lines thin out" in the earlier note.
+The thresholds are first guesses, to be tuned by use after v1.

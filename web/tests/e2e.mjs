@@ -416,6 +416,11 @@ try {
     for (const e of [r.x0, r.y0, r.w - r.x1, r.h - r.y1]) assert.ok(e >= 20, 'margin ' + e + ' ' + JSON.stringify(r));
   });
 
+  await check('level of detail: far out the quilt is grey blocks or a faded grid, close up everything', async () => {
+    const r = await page.evaluate(() => { const v = window.__app.view; const out = {}; for (const k of [0.01, 0.05, 0.5]) { v.zoomAt(k / v.tf.k); out[k] = v.lod(); v.draw(); } v.fit(false); return out; });
+    assert.deepEqual(r, { 0.01: 'blocks', 0.05: 'faded', 0.5: 'full' });
+  });
+
   await check('on a large file the Graphviz layout is not started on its own, but can be asked for', async () => {
     if (await page.locator('#engine-mode').isHidden()) await page.click('#view-btn');
     await page.selectOption('#engine-mode', 'port');
