@@ -31,6 +31,23 @@ fn main() {
         .unwrap();
     println!("quick layout {:?} (crossings {})", t.elapsed(), q.score.crossings);
     let t = Instant::now();
+    let fams = family_layout::input_from_derived(&d);
+    {
+        let e = family_layout::dot::graph_edges(g.people.len(), &fams);
+        if let Ok(path) = std::env::var("DUMP_DOT") {
+            let _ = std::fs::write(path, family_layout::dot::dot_source(g.people.len(), &fams));
+        }
+        let t2 = Instant::now();
+        let n = g.people.len() + fams.len();
+        let r = family_layout::dotrank::rank_nodes(n, &e);
+        println!("  ranking alone {:?} ({} nodes, {} edges, {} ranks)", t2.elapsed(), n, e.len(), r.iter().max().unwrap() + 1);
+    }
+    let pr = family_layout::dot::layout_with_port(g.people.len(), &tb, &fams, &Default::default(), &mut |_: family_layout::Progress| true);
+    match pr {
+        Ok(Some(l)) => println!("graphviz port {:?} (crossings {})", t.elapsed(), l.score.crossings),
+        other => println!("graphviz port failed: {:?}", other.map(|o| o.is_some())),
+    }
+    let t = Instant::now();
     let l = family_layout::layout_graph(&g, &d);
     let el = t.elapsed();
     let mut sizes: std::collections::HashMap<u32, usize> = Default::default();
