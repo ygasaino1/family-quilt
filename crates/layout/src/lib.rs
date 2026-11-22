@@ -18,6 +18,7 @@
 //! the person's index (= creation order).
 
 pub mod dot;
+pub mod dotrank;
 pub mod order;
 pub mod rank;
 pub mod score;
