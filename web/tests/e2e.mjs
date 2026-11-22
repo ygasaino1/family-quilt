@@ -340,7 +340,11 @@ try {
     });
     const res = await fetch(base + '/api/import/gedcom', { method: 'POST', headers: { 'Sec-Fetch-Site': 'same-origin' }, body: ged });
     assert.ok(res.ok);
+    // The built-in annealing engine is the slow one that shows the progress strip (the Graphviz layout is fast).
     await page.click('#nav-quilt');
+    if (await page.locator('#engine-mode').isHidden()) await page.click('#view-btn');
+    await page.selectOption('#engine-mode', 'own');
+    if (await page.locator('#engine-mode').isVisible()) await page.click('#view-btn');
     await page.evaluate(() => window.__app.refreshAll());
     await page.waitForFunction(() => window.__app.view.q.n > 300);
     // The strip shows the real stage while the careful layout runs.
@@ -385,7 +389,7 @@ try {
     const hasDot = spawnSync('dot', ['-V']).status === 0;
     if (await page.locator('#engine-mode').isHidden()) await page.click('#view-btn');
     await page.selectOption('#engine-mode', 'dot');
-    await page.waitForFunction(() => document.getElementById('strip').hidden && window.__app.view.q.payload.layout === 'full' && !window.__app.view.anim, null, { timeout: 30000 }).catch(async (e) => { throw new Error(e.message + ' LOG ' + srvLog.slice(-800) + ' state ' + JSON.stringify(await page.evaluate(() => ({ strip: document.getElementById('strip').hidden, layout: window.__app.view.q.payload.layout, engine: window.__app.view.q.payload.engine, anim: !!window.__app.view.anim, job: window.__app.view.q.payload.job })))); });
+    await page.waitForFunction(() => document.getElementById('strip').hidden && window.__app.view.q.payload.layout === 'full' && window.__app.view.q.payload.engine !== 'port' && !window.__app.view.anim, null, { timeout: 30000 }).catch(async (e) => { throw new Error(e.message + ' LOG ' + srvLog.slice(-800) + ' state ' + JSON.stringify(await page.evaluate(() => ({ strip: document.getElementById('strip').hidden, layout: window.__app.view.q.payload.layout, engine: window.__app.view.q.payload.engine, anim: !!window.__app.view.anim, job: window.__app.view.q.payload.job })))); });
     const r = await page.evaluate(() => ({ engine: window.__app.view.q.payload.engine, note: document.getElementById('engine-note').textContent, n: window.__app.view.q.n }));
     if (hasDot) assert.equal(r.engine, 'dot');
     else assert.ok(r.engine.startsWith('own'), r.engine);

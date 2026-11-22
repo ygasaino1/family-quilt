@@ -153,8 +153,8 @@ coordinates are not needed because the original only reads the layer and the ord
   write the edges in the original's shape (per person: the edge to its parent family, then the edges from the
   families it is a parent of), people in our order.
 * A family without parents is handled as in the original (`familyFirst`): the diagonal starts with a block of columns.
-* Engines in the View menu: *Built in* (annealing, the default for now), *Graphviz layout (built in)* (`engine=port`),
+* Engines in the View menu: *Built in* (annealing), *Graphviz layout (built in)* (`engine=port`),
   and *Graphviz dot program* (`engine=dot`, optional, only when a `dot` is found). Both Graphviz engines fall back to
-  the built-in one when they cannot be used. Making the Graphviz layout the default waits for the user's review.
+  the built-in one when they cannot be used. The Graphviz layout (`engine=port`) became the default after the user reviewed the comparison (2026-11-22).
 * Licence: Graphviz is distributed under the Eclipse Public License 1.0. The port is derived work, so it is credited in
   `NOTICE` and the module headers; the EPL terms have to be checked before release.
