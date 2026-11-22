@@ -26,8 +26,8 @@ fn main() {
             intern(line.trim_end_matches(';').trim_matches('"'), &mut id, &mut names);
         }
     }
-    let r = family_layout::dotrank::rank_nodes(names.len(), &edges);
-    for (n, r) in names.iter().zip(r) {
-        println!("{n} {r}");
+    let l = family_layout::dotorder::layout_nodes(names.len(), &edges);
+    for (i, n) in names.iter().enumerate() {
+        println!("{n} {} {}", l.rank[i], l.pos[i]);
     }
 }

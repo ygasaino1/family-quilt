@@ -17,24 +17,24 @@ const NONE: u32 = u32::MAX;
 const SEARCH_SIZE: usize = 30;
 
 #[derive(Clone, Debug)]
-struct Edge {
-    tail: u32,
-    head: u32,
-    minlen: i32,
-    weight: i32,
+pub(crate) struct Edge {
+    pub(crate) tail: u32,
+    pub(crate) head: u32,
+    pub(crate) minlen: i32,
+    pub(crate) weight: i32,
     cut: i32,
     tree_index: i32, // -1 = not a tree edge
 }
 
 /// The fast graph: nodes with ordered in/out lists over a pool of edges.
-struct Fast {
-    edges: Vec<Edge>,
-    out: Vec<Vec<u32>>,
-    inn: Vec<Vec<u32>>,
+pub(crate) struct Fast {
+    pub(crate) edges: Vec<Edge>,
+    pub(crate) out: Vec<Vec<u32>>,
+    pub(crate) inn: Vec<Vec<u32>>,
 }
 
 impl Fast {
-    fn new(n: usize) -> Self {
+    pub(crate) fn new(n: usize) -> Self {
         Fast { edges: Vec::new(), out: vec![Vec::new(); n], inn: vec![Vec::new(); n] }
     }
 
@@ -52,7 +52,7 @@ impl Fast {
     }
 
     /// `virtual_edge` (`new_virtual_edge` + `fast_edge`): copies minlen and weight from `orig`.
-    fn virtual_edge(&mut self, u: u32, v: u32, minlen: i32, weight: i32) -> u32 {
+    pub(crate) fn virtual_edge(&mut self, u: u32, v: u32, minlen: i32, weight: i32) -> u32 {
         let id = self.edges.len() as u32;
         self.edges.push(Edge { tail: u, head: v, minlen, weight, cut: 0, tree_index: -1 });
         self.out[u as usize].push(id);
@@ -68,6 +68,12 @@ impl Fast {
     }
 
     /// `zapinlist`: remove `e` from the list and fill the hole with the last member.
+    pub(crate) fn add_node(&mut self) -> u32 {
+        self.out.push(Vec::new());
+        self.inn.push(Vec::new());
+        (self.out.len() - 1) as u32
+    }
+
     fn zap(list: &mut Vec<u32>, e: u32) {
         if let Some(i) = list.iter().position(|&x| x == e) {
             list.swap_remove(i);
@@ -97,19 +103,26 @@ impl Fast {
     }
 }
 
+/// The edges of every node in cgraph's order (`agfstout`): by the sequence number of the head, then of the
+/// edge (`agedgeseqcmpf`), not by creation order alone. Edge numbers index `edges`.
+pub(crate) fn out_edges_by_tail(n: usize, edges: &[(u32, u32)]) -> Vec<Vec<u32>> {
+    let mut by_tail: Vec<Vec<u32>> = vec![Vec::new(); n];
+    for (i, &(t, _)) in edges.iter().enumerate() {
+        by_tail[t as usize].push(i as u32);
+    }
+    for l in &mut by_tail {
+        l.sort_by_key(|&ei| (edges[ei as usize].1, ei));
+    }
+    by_tail
+}
+
 /// Rank the nodes like `dot1_rank` does for a plain graph. See the module comment.
 pub fn rank_nodes(n: usize, edges: &[(u32, u32)]) -> Vec<i32> {
     let mut g = Fast::new(n);
     // class1: one fast edge per (tail, head) pair; parallel edges are merged, self loops dropped.
     // dot walks the nodes in creation order and each node's out-edges in cgraph's order (see below).
-    let mut by_tail: Vec<Vec<u32>> = vec![Vec::new(); n];
-    for (i, &(t, _)) in edges.iter().enumerate() {
-        by_tail[t as usize].push(i as u32);
-    }
+    let by_tail = out_edges_by_tail(n, edges);
     for t in 0..n {
-        // cgraph keeps a node's out-edges ordered by the sequence number of the head, then of the edge
-        // (`agedgeseqcmpf`), not by creation order alone.
-        by_tail[t].sort_by_key(|&ei| (edges[ei as usize].1, ei));
         for &ei in &by_tail[t] {
             let (u, v) = edges[ei as usize];
             if u == v {
@@ -135,9 +148,10 @@ pub fn rank_nodes(n: usize, edges: &[(u32, u32)]) -> Vec<i32> {
 }
 
 /// `decompose` (decomp.c): connected components, nodes listed in the order dot's iterative DFS adds them.
-fn decompose(g: &Fast, n: usize) -> Vec<Vec<u32>> {
+/// The search starts from the first `n` nodes (the real ones); virtual nodes are found through them.
+pub(crate) fn decompose(g: &Fast, n: usize) -> Vec<Vec<u32>> {
     // 0 = unseen, 1 = on the stack, 2 = done
-    let mut mark = vec![0u8; n];
+    let mut mark = vec![0u8; g.out.len()];
     let mut comps = Vec::new();
     let mut stack: Vec<u32> = Vec::new();
     for s in 0..n as u32 {
