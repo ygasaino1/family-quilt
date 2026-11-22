@@ -4,6 +4,8 @@ import { t } from './i18n.js';
 import { CW, RH, HH, WORLD_FONT, buildGeometry, floorIndex, blank, blend, mappedFrom } from './geometry.js';
 
 export { CW, RH, HH };
+
+const FIT_MARGIN = 28;
 const HALF = 7.6; // half the size of a mark: marks nearly fill the crossing of a row and a column
 const MIN_K = 0.002;
 const MAX_K = 8;
@@ -123,16 +125,15 @@ export class QuiltView extends EventTarget {
   }
 
   // ---------- view transform ----------
-  bounds() {
-    const g = this.geo;
-    return { x0: -20, y0: -20, x1: (g ? g.width : 100) + 20, y1: (g ? g.height : 100) + 20 };
-  }
-
+  /** Show the whole quilt with a margin of FIT_MARGIN screen pixels on every side (the zoom bar sits in the bottom corner). */
   fit(animate = true) {
-    const b = this.bounds();
+    const g = this.geo;
     const { w, h } = this.size;
-    const k = clamp(Math.min(w / (b.x1 - b.x0), h / (b.y1 - b.y0)), MIN_K, 1.5);
-    const target = { k, x: (w - (b.x1 - b.x0) * k) / 2 - b.x0 * k, y: (h - (b.y1 - b.y0) * k) / 2 - b.y0 * k };
+    const bw = g ? g.width : 100;
+    const bh = g ? g.height : 100;
+    const m = FIT_MARGIN;
+    const k = clamp(Math.min((w - 2 * m) / bw, (h - 2 * m) / bh), MIN_K, 1.5);
+    const target = { k, x: (w - bw * k) / 2, y: (h - bh * k) / 2 };
     this.moveTo(target, animate);
   }
 

@@ -408,6 +408,14 @@ try {
     await page.keyboard.press('Escape');
   });
 
+  await check('Fit shows the whole quilt with a margin on every side, bottom row included', async () => {
+    await page.keyboard.press('Escape');
+    await page.click('#fit');
+    await page.waitForFunction(() => !window.__app.view.tween, null, { timeout: 5000 });
+    const r = await page.evaluate(() => { const v = window.__app.view; const g = v.geo; return { x0: v.tf.x, y0: v.tf.y, x1: v.tf.x + g.width * v.tf.k, y1: v.tf.y + g.height * v.tf.k, w: v.size.w, h: v.size.h }; });
+    for (const e of [r.x0, r.y0, r.w - r.x1, r.h - r.y1]) assert.ok(e >= 20, 'margin ' + e + ' ' + JSON.stringify(r));
+  });
+
   await check('on a large file the Graphviz layout is not started on its own, but can be asked for', async () => {
     if (await page.locator('#engine-mode').isHidden()) await page.click('#view-btn');
     await page.selectOption('#engine-mode', 'port');
