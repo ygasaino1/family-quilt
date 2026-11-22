@@ -272,5 +272,11 @@
   "ago.now": "just now",
   "view.search_options": "Search",
   "search.case_short": "Match case",
-  "search.literal_short": "Exact text"
+  "search.literal_short": "Exact text",
+  "view.engine": "Layout engine",
+  "engine.own": "Built in",
+  "engine.dot": "Graphviz dot (as the original)",
+  "engine.used_dot": "Order made by Graphviz dot.",
+  "engine.waiting": "Showing the built-in order while Graphviz works.",
+  "engine.fallback": "Graphviz dot not used ({why}); showing the built-in order."
 }

@@ -1,6 +1,6 @@
 // End-to-end checks in a real browser (Playwright, development only: nothing from it ships).
 // Run: FAMILY_APP=target/debug/family-app node web/tests/e2e.mjs   (needs `playwright` resolvable)
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -378,6 +378,29 @@ try {
     await page.click('#view-btn');
     await page.selectOption('#layout-mode', 'tree');
     await page.waitForFunction(() => window.__app.view.q.payload.mode === 'tree');
+    await page.keyboard.press('Escape');
+  });
+
+  await check('Graphviz engine is optional: used when found, the built-in order otherwise, and the geometry rules still hold', async () => {
+    const hasDot = spawnSync('dot', ['-V']).status === 0;
+    if (await page.locator('#engine-mode').isHidden()) await page.click('#view-btn');
+    await page.selectOption('#engine-mode', 'dot');
+    await page.waitForFunction(() => document.getElementById('strip').hidden && window.__app.view.q.payload.layout === 'full' && !window.__app.view.anim, null, { timeout: 30000 }).catch(async (e) => { throw new Error(e.message + ' LOG ' + srvLog.slice(-800) + ' state ' + JSON.stringify(await page.evaluate(() => ({ strip: document.getElementById('strip').hidden, layout: window.__app.view.q.payload.layout, engine: window.__app.view.q.payload.engine, anim: !!window.__app.view.anim, job: window.__app.view.q.payload.job })))); });
+    const r = await page.evaluate(() => ({ engine: window.__app.view.q.payload.engine, note: document.getElementById('engine-note').textContent, n: window.__app.view.q.n }));
+    if (hasDot) assert.equal(r.engine, 'dot');
+    else assert.ok(r.engine.startsWith('own'), r.engine);
+    assert.ok(r.note.length > 0, 'the View menu says which engine made the order');
+    const bad = await page.evaluate(() => {
+      const v = window.__app.view; const q = v.q; const g = v.geo; const out = [];
+      q.cols.forEach((col, j) => {
+        for (const x of col.p) if (!(g.chy[j] >= g.ry[x] + 20)) out.push('header above parent ' + x);
+        for (const c of col.c) if (!(g.chy[j] + 20 <= g.ry[c.r])) out.push('header below child ' + c.r);
+      });
+      return out;
+    });
+    assert.deepEqual(bad, []);
+    await page.selectOption('#engine-mode', 'own');
+    await page.waitForFunction(() => window.__app.view.q.payload.engine === 'own');
     await page.keyboard.press('Escape');
   });
 

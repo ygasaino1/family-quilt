@@ -85,3 +85,30 @@ async fn quilt_payload_has_columns_and_link_kinds() {
     assert_eq!(kids.len(), 1);
     assert_eq!(cols[0]["h"], "married");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dot_engine_is_optional_and_never_breaks_the_quilt() {
+    let (p, _st, _d) = start().await;
+    let (s, v) = get(p, "/api/quilt?engine=dot");
+    assert_eq!(s, 200);
+    assert_eq!(v["people"].as_array().unwrap().len(), 3);
+    let mut engine = String::new();
+    for _ in 0..100 {
+        let (_, v) = get(p, "/api/quilt?engine=dot");
+        if v["layout"] == "full" {
+            engine = v["engine"].as_str().unwrap_or("").to_string();
+            assert_eq!(v["columns"].as_array().unwrap().len(), 1);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // Graphviz present: the original's engine made it; absent: the built-in one, with the reason.
+    if family_layout::dot::find_dot().is_some() {
+        assert_eq!(engine, "dot");
+    } else {
+        assert!(engine.starts_with("own"), "{engine}");
+    }
+    // The built-in engine's slot is separate and unaffected.
+    let (_, v) = get(p, "/api/quilt");
+    assert!(v["engine"] == "own");
+}

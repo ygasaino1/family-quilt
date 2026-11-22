@@ -17,6 +17,7 @@
 //! Everything is deterministic: ties are broken by birth date (earliest possible day) and then by
 //! the person's index (= creation order).
 
+pub mod dot;
 pub mod order;
 pub mod rank;
 pub mod score;

@@ -15,6 +15,7 @@ use axum::extract::{Query, State};
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use family_families::{derive_families, Derived};
+use family_layout::dot::{find_dot, layout_with_dot};
 use family_layout::{input_from_derived, layout_with_progress, Align, Effort, Hint, Layout, Mode, Options, Progress, Sink, Snapshot, Stage};
 use family_store::{AccessContext, Graph, GraphFilter, GraphLink, GraphPerson, RelType};
 use serde::Deserialize;
@@ -45,6 +46,8 @@ struct Entry {
     body: Arc<String>,
     rows: Vec<String>,
     cols: Vec<String>,
+    /// Which engine made this order: `own`, `dot`, or `own (dot unavailable: <why>)`.
+    engine: String,
 }
 
 #[derive(Default, Clone)]
@@ -65,6 +68,7 @@ struct Job {
     graph: Arc<(Graph, Derived)>,
     quick: Layout,
     mode: Mode,
+    dot: bool,
 }
 
 #[derive(Deserialize, Default)]
@@ -74,6 +78,8 @@ pub struct QuiltQuery {
     pub review: Option<String>,
     pub live: Option<u8>,
     pub snapshot: Option<u8>,
+    /// `dot` = the original's engine (Graphviz), used if it can be found; anything else = built-in.
+    pub engine: Option<String>,
 }
 
 fn mode_of(q: &QuiltQuery) -> Mode {
@@ -84,8 +90,12 @@ fn mode_of(q: &QuiltQuery) -> Mode {
     }
 }
 
+fn wants_dot(engine: &Option<String>) -> bool {
+    engine.as_deref() == Some("dot")
+}
+
 fn slot_name(q: &QuiltQuery) -> String {
-    format!("{}-{}", q.mode.as_deref().unwrap_or("tree"), q.pending.unwrap_or(1))
+    format!("{}{}-{}", if wants_dot(&q.engine) { "dot-" } else { "" }, q.mode.as_deref().unwrap_or("tree"), q.pending.unwrap_or(1))
 }
 
 fn family_key(g: &Graph, parents: &[u32]) -> String {
@@ -301,6 +311,8 @@ fn quilt_sync(st: &Shared, q: &QuiltQuery) -> Result<Response, ApiError> {
     }
     let pending = q.pending.unwrap_or(1) == 1;
     let name = slot_name(q);
+    let want_dot = wants_dot(&q.engine);
+    let engine_label = if want_dot { "dot" } else { "own" };
     let key = lock_store(st).data_key(&CTX)?;
     let mut state = st.quilt.lock().unwrap_or_else(|e| e.into_inner());
     let slot = state.slots.entry(name.clone()).or_default();
@@ -323,14 +335,14 @@ fn quilt_sync(st: &Shared, q: &QuiltQuery) -> Result<Response, ApiError> {
     // Current entry?
     if let Some(e) = slot.entry.as_ref().filter(|e| e.key == key) {
         let job = slot.job.as_ref().filter(|j| j.key == key && !j.finished.load(Ordering::Relaxed)).map(|j| job_json(j));
-        return Ok(json_response(splice(&e.body, &json!({"layout": if e.full { "full" } else { "quick" }, "job": job}))));
+        return Ok(json_response(splice(&e.body, &json!({"layout": if e.full { "full" } else { "quick" }, "job": job, "engine": e.engine}))));
     }
     // Cold start: a careful layout saved in the file for exactly this data.
     if let Some(cached) = lock_store(st).meta_get(&CTX, &format!("layout_cache:{name}"))? {
         if let Some((k, body)) = cached.split_once('\n') {
             if k == key {
-                slot.entry = Some(Entry { key: key.clone(), full: true, body: Arc::new(body.to_string()), rows: vec![], cols: vec![] });
-                return Ok(json_response(splice(body, &json!({"layout": "full", "job": null}))));
+                slot.entry = Some(Entry { key: key.clone(), full: true, body: Arc::new(body.to_string()), rows: vec![], cols: vec![], engine: engine_label.to_string() });
+                return Ok(json_response(splice(body, &json!({"layout": "full", "job": null, "engine": engine_label}))));
             }
         }
     }
@@ -361,11 +373,12 @@ fn quilt_sync(st: &Shared, q: &QuiltQuery) -> Result<Response, ApiError> {
         graph: Arc::new((g, d)),
         quick: quick.clone(),
         mode,
+        dot: want_dot,
     });
     let body = Arc::new(body);
-    slot.entry = Some(Entry { key: key.clone(), full: false, body: body.clone(), rows, cols });
+    slot.entry = Some(Entry { key: key.clone(), full: false, body: body.clone(), rows, cols, engine: "own".into() });
     slot.job = Some(job.clone());
-    let resp = splice(&body, &json!({"layout": "quick", "job": job_json(&job)}));
+    let resp = splice(&body, &json!({"layout": "quick", "job": job_json(&job), "engine": "own"}));
     drop(state);
     let (st2, name2) = (st.clone(), name);
     std::thread::spawn(move || run_job(st2, name2, job, hint, fams, tb, opts));
@@ -375,7 +388,26 @@ fn quilt_sync(st: &Shared, q: &QuiltQuery) -> Result<Response, ApiError> {
 fn run_job(st: Shared, name: String, job: Arc<Job>, hint: Option<Hint>, fams: Vec<family_layout::FamilyIn>, tb: Vec<i64>, opts: Options) {
     let (g, d) = (&job.graph.0, &job.graph.1);
     let mut sink = JobSink { job: job.clone() };
-    let result = layout_with_progress(g.people.len(), &tb, &fams, &opts, hint.as_ref(), Effort::Full, &mut sink);
+    let mut engine = String::from("own");
+    let mut result = None;
+    let mut tried_dot = false;
+    if job.dot {
+        match find_dot() {
+            None => engine = "own (dot not found)".into(),
+            Some(program) => match layout_with_dot(g.people.len(), &tb, &fams, &opts, &program, &mut sink) {
+                Ok(Some(l)) => {
+                    engine = "dot".into();
+                    result = Some(l);
+                    tried_dot = true;
+                }
+                Ok(None) => tried_dot = true, // cancelled
+                Err(why) => engine = format!("own (dot unavailable: {why})"),
+            },
+        }
+    }
+    if result.is_none() && !(tried_dot && job.cancel.load(Ordering::Relaxed)) {
+        result = layout_with_progress(g.people.len(), &tb, &fams, &opts, hint.as_ref(), Effort::Full, &mut sink);
+    }
     job.finished.store(true, Ordering::Relaxed);
     let Some(l) = result else {
         job.cancel.store(true, Ordering::Relaxed);
@@ -389,10 +421,10 @@ fn run_job(st: Shared, name: String, job: Arc<Job>, hint: Option<Hint>, fams: Ve
     let slot = state.slots.entry(name.clone()).or_default();
     // Only if the data did not change meanwhile.
     if slot.job.as_ref().is_some_and(|j| Arc::ptr_eq(j, &job)) {
-        if body.len() <= CACHE_MAX_BYTES {
+        if body.len() <= CACHE_MAX_BYTES && (!job.dot || engine == "dot") {
             let _ = lock_store(&st).meta_set(&CTX, &format!("layout_cache:{name}"), &format!("{}\n{}", job.key, body));
         }
-        slot.entry = Some(Entry { key: job.key.clone(), full: true, body: Arc::new(body), rows, cols });
+        slot.entry = Some(Entry { key: job.key.clone(), full: true, body: Arc::new(body), rows, cols, engine });
     }
 }
 
@@ -400,10 +432,11 @@ fn run_job(st: Shared, name: String, job: Arc<Job>, hint: Option<Hint>, fams: Ve
 pub struct ProgressQuery {
     pub mode: Option<String>,
     pub pending: Option<u8>,
+    pub engine: Option<String>,
 }
 
 pub async fn progress(State(st): State<Shared>, Query(q): Query<ProgressQuery>) -> Result<Response, ApiError> {
-    let name = format!("{}-{}", q.mode.as_deref().unwrap_or("tree"), q.pending.unwrap_or(1));
+    let name = format!("{}{}-{}", if wants_dot(&q.engine) { "dot-" } else { "" }, q.mode.as_deref().unwrap_or("tree"), q.pending.unwrap_or(1));
     let key = lock_store(&st).data_key(&CTX)?;
     let state = st.quilt.lock().unwrap_or_else(|e| e.into_inner());
     let slot = state.slots.get(&name);

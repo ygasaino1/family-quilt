@@ -60,6 +60,12 @@
                   <option value="tree" data-i18n="layout.tree">Tree by tree</option>
                   <option value="layer" data-i18n="layout.layer">Generation by generation</option>
                 </select></label>
+              <label class="field"><span data-i18n="view.engine">Layout engine</span>
+                <select id="engine-mode">
+                  <option value="own" data-i18n="engine.own">Built in</option>
+                  <option value="dot" data-i18n="engine.dot">Graphviz dot (as the original)</option>
+                </select>
+                <span id="engine-note" class="hint" aria-live="polite"></span></label>
               <div class="field"><span data-i18n="view.highlight">When someone is selected</span>
                 <div class="row"><button id="hl-mode" class="btn" data-i18n-title="hl.title"></button><button id="hl-blood" class="btn" aria-pressed="true"></button></div></div>
               <div class="field"><span data-i18n="view.search_options">Search</span>

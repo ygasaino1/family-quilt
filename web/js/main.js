@@ -37,8 +37,12 @@ let cancelled = false;
 let lastDataKey = null;
 let firstLoad = true;
 
+function engineQuery() {
+  return pref('engine') === 'dot' ? '&engine=dot' : '';
+}
+
 function modeQuery() {
-  return `mode=${pref('layout')}&pending=1&live=${pref('live') === '1' ? 1 : 0}`;
+  return `mode=${pref('layout')}&pending=1&live=${pref('live') === '1' ? 1 : 0}${engineQuery()}`;
 }
 
 async function reload({ glide = false, fit = false } = {}) {
@@ -55,6 +59,17 @@ function applyPayload(p, opts) {
   $('empty').hidden = q.n > 0;
   updateLegend();
   sidebar.refresh();
+  showEngine(p.engine);
+}
+
+/** Which engine made the order on screen, in the View menu. */
+function showEngine(engine) {
+  const note = $('engine-note');
+  if (!note) return;
+  if (pref('engine') !== 'dot') note.textContent = '';
+  else if (engine === 'dot') note.textContent = t('engine.used_dot');
+  else if (typeof engine === 'string' && engine.startsWith('own (')) note.textContent = t('engine.fallback', { why: engine.slice(5, -1) });
+  else note.textContent = t('engine.waiting');
 }
 
 function stripText(job) {
@@ -70,7 +85,11 @@ function hideStrip() {
 }
 
 async function pollJob() {
-  if (polling) return;
+  if (polling) {
+    // a loop that is about to stop (after "keep current") must carry on for the job started since
+    cancelled = false;
+    return;
+  }
   polling = true;
   cancelled = false;
   let lastSnap = null;
@@ -78,7 +97,7 @@ async function pollJob() {
     for (;;) {
       await new Promise((r) => setTimeout(r, 350));
       if (cancelled) break;
-      const pr = await api(`/quilt/progress?mode=${pref('layout')}&pending=1`);
+      const pr = await api(`/quilt/progress?mode=${pref('layout')}&pending=1${engineQuery()}`);
       const job = pr.job;
       if (!job || job.state !== 'running') {
         if (job && job.state === 'done') await reload({ glide: true });
@@ -273,6 +292,11 @@ function bindToolbar() {
     setPref('label', $('label-mode').value);
     app.view.labelMode = $('label-mode').value;
     app.view.dirty = true;
+  });
+  $('engine-mode').value = pref('engine');
+  $('engine-mode').addEventListener('change', async () => {
+    setPref('engine', $('engine-mode').value);
+    await reload({ glide: true });
   });
   $('layout-mode').value = pref('layout');
   $('layout-mode').addEventListener('change', async () => {

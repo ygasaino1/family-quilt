@@ -156,3 +156,4 @@ body.privacy #side:hover, body.privacy #side:focus-within { filter: none; }
 .panel .actions { justify-content: stretch; }
 .panel .actions .btn { flex: 1 1 0; font-weight: 600; }
 .stack > * + * { margin-block-start: 10px; }
+.hint{display:block;font-size:12px;color:var(--muted);margin-top:4px}
