@@ -179,7 +179,7 @@ pub fn submit(store: &mut Store, agent: &str, body: &Value) -> Result<SubmitResu
     let Some(top) = as_obj(body, "$", &mut errs) else {
         return Err(ReviewError::Invalid(errs.0));
     };
-    unknown_keys(top, "$", &["summary", "source_text", "people", "relationships", "changes"], &mut errs);
+    unknown_keys(top, "$", &["summary", "source_text", "people", "relationships", "changes", "acknowledge_rejected"], &mut errs);
     let summary = opt_str(top, "summary", "$", 300, &mut errs);
     if summary.is_none() {
         errs.add("$.summary", "required", "a short summary of the request is required (what the user asked for)");
@@ -555,10 +555,33 @@ pub fn submit(store: &mut Store, agent: &str, body: &Value) -> Result<SubmitResu
         return Err(ReviewError::Invalid(errs.0));
     }
 
+    // ---- the same thing again after a rejection? ----
+    let fps = fingerprints(&people_in, &rels_in, &changes_in);
+    let acknowledged: HashSet<String> = top.get("acknowledge_rejected").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
+    if !fps.is_empty() {
+        for (old, old_fps) in store.rejected_fingerprints(&CTX, 300)? {
+            if !acknowledged.contains(&old.id) && fps.iter().all(|f| old_fps.contains(f)) {
+                let why = old.decision_note.as_deref().filter(|n| !n.is_empty()).map(|n| format!(" Reason given: {n}")).unwrap_or_default();
+                return Err(ReviewError::Invalid(vec![FieldError::new(
+                    "$",
+                    "previously_rejected",
+                    format!(
+                        "The user already rejected this (proposal {}, \"{}\", decided {}).{why} Do not send it again. If you have changed it because of that, send it again with \"acknowledge_rejected\": [\"{}\"] and say in the summary what is different.",
+                        old.id,
+                        old.summary.as_deref().unwrap_or(""),
+                        old.decided_at.as_deref().unwrap_or(""),
+                        old.id
+                    ),
+                )]));
+            }
+        }
+    }
+
     // ---- write everything or nothing ----
     let mut fail: Option<(String, &'static str, String)> = None;
     let out = store.atomic(|s| {
         let pid = s.insert_proposal(&CTX, summary.as_deref().unwrap_or(""), &source_text, &created_by)?;
+        s.set_fingerprints(&pid, &fps)?;
         let mut ids: HashMap<String, String> = HashMap::new();
         let mut people_out = vec![];
         for (i, p) in people.iter().enumerate() {
@@ -622,4 +645,43 @@ pub fn submit(store: &mut Store, agent: &str, body: &Value) -> Result<SubmitResu
             None => Err(e.into()),
         },
     }
+}
+
+/// Short strings saying what a proposal asks for, so that the same request sent again after a rejection is recognised:
+/// a new person is its names and birth year, a link is its type and its two ends, an edit is its target, operation and
+/// new values. Wording (notes, summary) and the order of items do not matter.
+pub fn fingerprints(people: &[Value], rels: &[Value], changes: &[Value]) -> Vec<String> {
+    let low = |v: &Value| v.as_str().unwrap_or("").trim().to_lowercase();
+    let mut by_ref: HashMap<String, String> = HashMap::new();
+    let mut out = vec![];
+    for p in people {
+        let name =
+            if p.get("full_name").is_some_and(|f| !f.is_null()) && p.get("given_name").is_none() { low(&p["full_name"]) } else { format!("{} {}", low(&p["given_name"]), low(&p["family_name"])) };
+        let year: String = low(&p["birth_date"]).chars().take(4).collect();
+        let fp = format!("p|{}|{}|{}", name.split_whitespace().collect::<Vec<_>>().join(" "), low(&p["sex"]), year);
+        if let Some(r) = p.get("ref").and_then(Value::as_str) {
+            by_ref.insert(r.to_string(), fp.clone());
+        }
+        out.push(fp);
+    }
+    let end = |v: &Value| -> String {
+        let s = v.as_str().unwrap_or("");
+        by_ref.get(s).cloned().unwrap_or_else(|| s.to_string())
+    };
+    for r in rels {
+        let (mut a, mut b) = (end(&r["a"]), end(&r["b"]));
+        let t = low(&r["type"]);
+        if t == "partnership" && a > b {
+            std::mem::swap(&mut a, &mut b);
+        }
+        out.push(format!("r|{t}|{a}|{b}|{}", low(&r["kind"])));
+    }
+    for c in changes {
+        let mut fields: Vec<String> = c.get("fields").and_then(Value::as_object).map(|o| o.iter().map(|(k, v)| format!("{k}={}", norm(&v["to"]))).collect()).unwrap_or_default();
+        fields.sort();
+        out.push(format!("c|{}|{}|{}|{}", low(&c["target_type"]), c["target_id"].as_str().unwrap_or(""), low(&c["op"]), fields.join(";")));
+    }
+    out.sort();
+    out.dedup();
+    out
 }

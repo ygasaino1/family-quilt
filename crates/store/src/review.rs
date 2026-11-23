@@ -19,6 +19,8 @@ pub struct ProposalRow {
     pub status: String,
     pub created_at: String,
     pub decided_at: Option<String>,
+    /// The reviewer's reason for rejecting, shown to the agent.
+    pub decision_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -43,10 +45,10 @@ pub struct ProposalRecords {
 }
 
 fn proposal_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<ProposalRow> {
-    Ok(ProposalRow { id: r.get(0)?, summary: r.get(1)?, source_text: r.get(2)?, created_by: r.get(3)?, status: r.get(4)?, created_at: r.get(5)?, decided_at: r.get(6)? })
+    Ok(ProposalRow { id: r.get(0)?, summary: r.get(1)?, source_text: r.get(2)?, created_by: r.get(3)?, status: r.get(4)?, created_at: r.get(5)?, decided_at: r.get(6)?, decision_note: r.get(7)? })
 }
 
-const PROPOSAL_COLS: &str = "id, summary, source_text, created_by, status, created_at, decided_at";
+const PROPOSAL_COLS: &str = "id, summary, source_text, created_by, status, created_at, decided_at, decision_note";
 
 type RawChange = (String, String, String, String, String, Option<String>, Option<String>, Option<String>, String);
 
@@ -107,6 +109,57 @@ impl Store {
             return Err(StoreError::Conflict(format!("this proposal was already {}", cur.status)));
         }
         Ok(())
+    }
+
+    /// The reviewer's reason (kept with the rejected proposal; the agent can read it).
+    pub fn set_decision_note(&mut self, id: &str, note: &str) -> Result<()> {
+        self.conn.execute("UPDATE proposal SET decision_note = ?2 WHERE id = ?1", params![id, note])?;
+        Ok(())
+    }
+
+    /// What the reviewer corrected in a pending proposal: `[{kind, target_id, field, original, current, at}]`.
+    pub fn reviewer_edits(&self, id: &str) -> Result<Vec<serde_json::Value>> {
+        let s: Option<String> = self.conn.query_row("SELECT reviewer_edits FROM proposal WHERE id = ?1", [id], |r| r.get(0)).optional()?.flatten();
+        Ok(s.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default())
+    }
+
+    pub fn set_reviewer_edits(&mut self, id: &str, edits: &[serde_json::Value]) -> Result<()> {
+        self.conn.execute("UPDATE proposal SET reviewer_edits = ?2 WHERE id = ?1", params![id, serde_json::to_string(edits).unwrap_or_default()])?;
+        Ok(())
+    }
+
+    /// Change what a proposed edit of an existing record will set one field to (the reviewer's correction).
+    pub fn set_change_to(&mut self, change_id: &str, field: &str, to: &serde_json::Value) -> Result<()> {
+        let cur: String = self
+            .conn
+            .query_row("SELECT patch FROM change WHERE id = ?1", [change_id], |r| r.get::<_, Option<String>>(0))
+            .optional()?
+            .flatten()
+            .ok_or_else(|| StoreError::invalid("change", "no such change"))?;
+        let mut patch: serde_json::Value = serde_json::from_str(&cur).unwrap_or_default();
+        let Some(f) = patch.get_mut(field) else { return Err(StoreError::invalid(field, "this change does not touch that field")) };
+        f["to"] = to.clone();
+        self.conn.execute("UPDATE change SET patch = ?2 WHERE id = ?1", params![change_id, patch.to_string()])?;
+        Ok(())
+    }
+
+    /// What a proposal asked for, as short strings (see the review crate's `fingerprints`).
+    pub fn set_fingerprints(&mut self, id: &str, fps: &[String]) -> Result<()> {
+        self.conn.execute("UPDATE proposal SET fingerprints = ?2 WHERE id = ?1", params![id, serde_json::to_string(fps).unwrap_or_default()])?;
+        Ok(())
+    }
+
+    /// Rejected proposals with their fingerprints, newest first: (proposal, fingerprints).
+    pub fn rejected_fingerprints(&self, _ctx: &AccessContext, limit: usize) -> Result<Vec<(ProposalRow, Vec<String>)>> {
+        let sql = format!("SELECT {PROPOSAL_COLS}, fingerprints FROM proposal WHERE status = 'rejected' AND fingerprints IS NOT NULL ORDER BY decided_at DESC LIMIT ?1");
+        let mut st = self.conn.prepare(&sql)?;
+        let rows = st.query_map([limit as i64], |r| Ok((proposal_from(r)?, r.get::<_, Option<String>>(8)?)))?;
+        let mut out = vec![];
+        for row in rows {
+            let (p, fp) = row?;
+            out.push((p, fp.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()));
+        }
+        Ok(out)
     }
 
     #[allow(clippy::too_many_arguments)]

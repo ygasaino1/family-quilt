@@ -250,6 +250,11 @@ pub fn approve(store: &mut Store, proposal_id: &str, req: &ApproveRequest, by: &
 
 /// Reject: nothing changes; the proposal's pending records are removed.
 pub fn reject(store: &mut Store, proposal_id: &str, by: &str) -> Result<RejectReport> {
+    reject_with_note(store, proposal_id, by, None)
+}
+
+/// Reject, with the reason the agent will read (kept short).
+pub fn reject_with_note(store: &mut Store, proposal_id: &str, by: &str, note: Option<&str>) -> Result<RejectReport> {
     let proposal = store.get_proposal(&CTX, proposal_id)?;
     if proposal.status != "pending" {
         return Err(StoreError::Conflict(format!("this proposal was already {}", proposal.status)).into());
@@ -284,6 +289,9 @@ pub fn reject(store: &mut Store, proposal_id: &str, by: &str) -> Result<RejectRe
             s.set_change_status(&CTX, &c.id, "rejected")?;
         }
         s.decide_proposal(&CTX, proposal_id, "rejected")?;
+        if let Some(n) = note.map(str::trim).filter(|n| !n.is_empty()) {
+            s.set_decision_note(proposal_id, &n.chars().take(500).collect::<String>())?;
+        }
         s.tag_revisions_since(&marker, proposal_id)?;
         Ok(())
     })?;

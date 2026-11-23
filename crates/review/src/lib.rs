@@ -11,6 +11,7 @@
 //! on an agent's behalf.
 
 pub mod apply;
+pub mod edit;
 pub mod fields;
 pub mod guide;
 pub mod query;
