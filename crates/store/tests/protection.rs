@@ -122,7 +122,7 @@ fn unprotected_tree_is_plain_sqlite_and_persists() {
     assert!(is_plain_sqlite(&path) && !key_file_path(&path).exists());
     let s = Store::open_tree(&path, Credentials::None, &NO_DELAY).unwrap();
     assert_eq!(s.get_person(&CTX, &id).unwrap().display_name, "Ali Karimi");
-    assert_eq!(s.schema_version().unwrap(), 1);
+    assert_eq!(s.schema_version().unwrap(), family_store::schema::latest_version());
     // a password given to a plain tree is simply ignored
     assert!(Store::open_tree(&path, Credentials::Password("x"), &NO_DELAY).is_ok());
     assert!(matches!(Store::create_tree(&path, Protection::None), Err(StoreError::AlreadyExists(_))));
@@ -149,7 +149,7 @@ fn protect_then_unprotect_keeps_all_data() {
     assert!(matches!(protect_tree(&path, "pw2", KDF, None), Err(StoreError::Conflict(_))), "already protected");
 
     let s = Store::open_tree(&path, Credentials::Password("pw"), &NO_DELAY).unwrap();
-    assert_eq!(s.schema_version().unwrap(), 1);
+    assert_eq!(s.schema_version().unwrap(), family_store::schema::latest_version());
     assert_eq!(s.meta_get(&CTX, "title").unwrap().as_deref(), Some("T"));
     assert_eq!(s.relationships_of(&CTX, &b).unwrap()[0].kind, Some(LinkKind::Adopted));
     s.close().unwrap();
