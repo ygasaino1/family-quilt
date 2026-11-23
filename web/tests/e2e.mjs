@@ -53,9 +53,10 @@ try {
   const page = await ctx.newPage();
   const warnings = [];
   const errors = [];
+  let allow400 = false; // set while a step sends a bad request on purpose
   page.on('console', (m) => {
     if (m.text().includes('missing translation key')) warnings.push(m.text());
-    if (m.type() === 'error' && !/status of 423/.test(m.text())) errors.push(m.text()); // 423: the tree was locked on purpose
+    if (m.type() === 'error' && !/status of 423/.test(m.text()) && !(allow400 && /status of 400/.test(m.text()))) errors.push(m.text()); // 423: the tree was locked on purpose
   });
   page.on('pageerror', (e) => errors.push(e.stack || e.message));
   await check('first run: the wizard makes the tree (name, no password) and the app starts', async () => {
@@ -63,6 +64,14 @@ try {
     await page.waitForSelector('#gate-wizard');
     assert.equal((await ui('/tree')).state, 'missing');
     assert.equal(await page.locator('#gate-pwbox').isHidden(), true);
+    // The folder choice: without a native dialog (this build has none) a typed path is offered; a bad one is explained.
+    assert.ok((await page.textContent('#gate-path')).includes('tree.sqlite'));
+    await page.click('#gate-folder-change');
+    await page.fill('#gate-folder', 'not/absolute');
+    allow400 = true;
+    await page.click('#gate-folder-set');
+    await page.waitForFunction(() => /full path/i.test(document.querySelector('#gate-folder-err')?.textContent || ''));
+    allow400 = false;
     await page.fill('#gate-title', 'The Roots');
     await page.click('#gate-protect');
     await page.fill('#gate-pw', 'short');

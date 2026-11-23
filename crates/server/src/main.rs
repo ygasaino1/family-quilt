@@ -56,7 +56,7 @@ async fn main() {
         tell("Family Tree", "Family Tree is already open. Look for its window (or close it first).");
         std::process::exit(1);
     }
-    let db = dir.join("tree.sqlite");
+    let db = tree::saved_tree_path(&dir);
     let tok = token::load_or_create(&dir).expect("cannot create the agent token");
     let state = AppState::new_closed(tok, dir.clone(), db, args.iter().any(|a| a == "--fast-kdf-for-tests"));
     // The window or browser reaches /api only with this run's cookie; headless runs (tests) have none.

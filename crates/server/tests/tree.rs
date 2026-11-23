@@ -217,3 +217,36 @@ fn a_second_copy_is_noticed_through_the_endpoint_file() {
     drop(l);
     assert!(!family_server::token::already_running(dir.path()), "a stale file from a crash does not block the start");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn first_run_can_choose_another_folder_and_remembers_it() {
+    let s = start().await;
+    let p = s.port;
+    let other = tempfile::tempdir().unwrap();
+    let folder = other.path().join("my family");
+    // Not absolute: refused.
+    let (c, v) = ui(p, "POST", "/api/tree/location", Some(json!({"folder": "relative/dir"})));
+    assert_eq!(c, 400, "{v}");
+    // Absolute: created, remembered, used.
+    let (c, v) = ui(p, "POST", "/api/tree/location", Some(json!({"folder": folder.to_str().unwrap()})));
+    assert_eq!(c, 200, "{v}");
+    assert!(folder.is_dir());
+    let (_, st) = ui(p, "GET", "/api/tree", None);
+    assert_eq!(st["state"], "missing");
+    assert!(st["path"].as_str().unwrap().contains("my family"), "{st}");
+    let (c, _) = ui(p, "POST", "/api/tree/create", Some(json!({"title": "T", "password": null})));
+    assert_eq!(c, 200);
+    assert!(folder.join("tree.sqlite").exists());
+    assert!(!s.dir.path().join("tree.sqlite").exists());
+    // The next start finds it through the remembered choice.
+    assert_eq!(tree::saved_tree_path(s.dir.path()), folder.canonicalize().unwrap().join("tree.sqlite"));
+    // Once a tree is open the place cannot be changed.
+    let (c, v) = ui(p, "POST", "/api/tree/location", Some(json!({"folder": other.path().to_str().unwrap()})));
+    assert_eq!(c, 409, "{v}");
+    // A remembered folder that vanished falls back to the default place.
+    drop(other);
+    assert_eq!(tree::saved_tree_path(s.dir.path()), s.dir.path().join("tree.sqlite"));
+    // Without the window feature the dialog is not offered.
+    let (c, v) = ui(p, "POST", "/api/tree/pick-folder", Some(json!({})));
+    assert_eq!(c, 501, "{v}");
+}

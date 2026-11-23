@@ -35,3 +35,8 @@ pub fn run(url: &str, title: &str) -> Result<(), String> {
     });
     Ok(())
 }
+
+/// The system "choose a folder" dialog. `None` when the person cancels.
+pub fn pick_folder() -> Option<std::path::PathBuf> {
+    rfd::FileDialog::new().set_title("Where should the family tree be kept?").pick_folder()
+}

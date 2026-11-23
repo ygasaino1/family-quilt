@@ -68,7 +68,41 @@ export function recoveryScreen(key, title) {
   });
 }
 
+/** Where the tree is kept, with a way to change it before the tree exists (native dialog, or a typed path). */
+function whereRow(info) {
+  const shown = h('code', { id: 'gate-path' }, info.path);
+  const err = h('p', { class: 'err', role: 'alert', id: 'gate-folder-err' });
+  const apply = async (folder) => {
+    say(err, '');
+    try {
+      const r = await treeAction('location', { folder });
+      shown.textContent = r.path;
+      if (r.state !== 'missing' && r.state !== undefined) location.reload(); // an existing tree was found there
+    } catch (e) {
+      say(err, e.message);
+    }
+  };
+  const typed = h('input', { type: 'text', id: 'gate-folder', placeholder: t('gate.folder_placeholder'), autocomplete: 'off', spellcheck: 'false' });
+  const set = h('button', { class: 'btn tiny', id: 'gate-folder-set', type: 'button', onclick: () => typed.value.trim() && apply(typed.value.trim()) }, t('gate.folder_use'));
+  const box = h('div', { class: 'row', hidden: true }, typed, set);
+  const change = h('button', { class: 'btn tiny', id: 'gate-folder-change', type: 'button' }, t('gate.folder_change'));
+  change.addEventListener('click', async () => {
+    if (info.can_pick) {
+      try {
+        const r = await treeAction('pick-folder', {});
+        if (r.path) await apply(r.path);
+      } catch (e) {
+        say(err, e.message);
+      }
+    } else {
+      box.hidden = !box.hidden;
+    }
+  });
+  return { row: h('div', { class: 'field' }, h('span', { class: 'muted small' }, t('gate.where_label'), ' '), shown, ' ', change, box, err) };
+}
+
 function wizard(info) {
+  const where = whereRow(info);
   return new Promise((resolve) => {
     const name = field('gate-title', t('gate.tree_name'), { maxlength: 200, value: '', autocomplete: 'off' });
     const protect = h('input', { type: 'checkbox', id: 'gate-protect' });
@@ -114,7 +148,7 @@ function wizard(info) {
       h('div', { class: 'field' }, h('label', { class: 'check' }, protect, ' ', t('gate.protect')), h('span', { class: 'muted' }, t('gate.protect_hint'))),
       pwBox,
       h('div', { class: 'field' }, h('label', { for: 'gate-file' }, t('gate.import')), file, h('span', { class: 'muted' }, t('gate.import_hint'))),
-      h('p', { class: 'muted small' }, t('gate.where', { path: info.path })),
+      where.row,
       err,
       h('div', { class: 'actions' }, go)));
   });

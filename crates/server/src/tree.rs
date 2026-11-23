@@ -61,9 +61,9 @@ pub fn lock_now(st: &Shared) {
 
 /// Open an unprotected tree without asking anything; a protected or missing one stays closed. Returns the new state.
 pub fn open_if_plain(st: &Shared) -> Result<TreeState, ApiError> {
-    let s = tree_state(&st.db_path)?;
+    let s = tree_state(&st.db_path())?;
     if s == TreeState::Plain && st.locked.load(Ordering::SeqCst) {
-        install(st, Store::open_tree(&st.db_path, Credentials::None, &opts(st))?);
+        install(st, Store::open_tree(&st.db_path(), Credentials::None, &opts(st))?);
     }
     Ok(s)
 }
@@ -124,6 +124,8 @@ pub fn routes() -> Router<Shared> {
         .route("/tree/unprotect", post(unprotect))
         .route("/tree/password", post(password))
         .route("/tree/auto-lock", post(auto_lock))
+        .route("/tree/pick-folder", post(pick_folder))
+        .route("/tree/location", post(location))
 }
 
 fn blocking_err(_: tokio::task::JoinError) -> ApiError {
@@ -131,7 +133,7 @@ fn blocking_err(_: tokio::task::JoinError) -> ApiError {
 }
 
 async fn state(State(st): State<Shared>) -> Result<Json<Value>, ApiError> {
-    let on_disk = tree_state(&st.db_path)?;
+    let on_disk = tree_state(&st.db_path())?;
     let open = !st.locked.load(Ordering::SeqCst);
     let (title, minutes) = if open {
         let s = st.store.lock().unwrap_or_else(|e| e.into_inner());
@@ -144,7 +146,9 @@ async fn state(State(st): State<Shared>) -> Result<Json<Value>, ApiError> {
         (false, TreeState::Missing) => "missing",
         (false, _) => "locked",
     };
-    Ok(Json(json!({"state": name, "protected": on_disk == TreeState::Protected, "title": title, "auto_lock_minutes": minutes, "path": st.db_path.display().to_string()})))
+    Ok(Json(
+        json!({"state": name, "protected": on_disk == TreeState::Protected, "title": title, "auto_lock_minutes": minutes, "path": st.db_path().display().to_string(), "can_pick": cfg!(feature = "window")}),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -157,15 +161,15 @@ struct CreateReq {
 
 /// First run: make the tree (protected or not), open it, and return the recovery key once.
 async fn create(State(st): State<Shared>, Json(b): Json<CreateReq>) -> Result<Json<Value>, ApiError> {
-    if tree_state(&st.db_path)? != TreeState::Missing {
+    if tree_state(&st.db_path())? != TreeState::Missing {
         return Err(ApiError::new(StatusCode::CONFLICT, "exists", "A tree already exists here."));
     }
     let st2 = st.clone();
     tokio::task::spawn_blocking(move || {
         let pw = b.password.filter(|p| !p.is_empty());
         let (mut store, rk) = match &pw {
-            Some(p) => Store::create_tree(&st2.db_path, Protection::Password { password: p, kdf: st2.kdf })?,
-            None => Store::create_tree(&st2.db_path, Protection::None)?,
+            Some(p) => Store::create_tree(&st2.db_path(), Protection::Password { password: p, kdf: st2.kdf })?,
+            None => Store::create_tree(&st2.db_path(), Protection::None)?,
         };
         let title = b.title.trim().chars().take(200).collect::<String>();
         if !title.is_empty() {
@@ -195,7 +199,7 @@ async fn unlock(State(st): State<Shared>, Json(b): Json<UnlockReq>) -> Result<Js
             (None, Some(r)) => Credentials::RecoveryKey(r),
             _ => Credentials::None,
         };
-        let store = Store::open_tree(&st2.db_path, creds, &opts(&st2))?;
+        let store = Store::open_tree(&st2.db_path(), creds, &opts(&st2))?;
         install(&st2, store);
         Ok(Json(json!({"ok": true})))
     })
@@ -222,8 +226,8 @@ async fn reset(State(st): State<Shared>, Json(b): Json<ResetReq>) -> Result<Json
     }
     let st2 = st.clone();
     tokio::task::spawn_blocking(move || {
-        reset_password_with_recovery_key(&st2.db_path, &b.recovery_key, &b.new_password, &opts(&st2), None)?;
-        install(&st2, Store::open_tree(&st2.db_path, Credentials::Password(&b.new_password), &opts(&st2))?);
+        reset_password_with_recovery_key(&st2.db_path(), &b.recovery_key, &b.new_password, &opts(&st2), None)?;
+        install(&st2, Store::open_tree(&st2.db_path(), Credentials::Password(&b.new_password), &opts(&st2))?);
         Ok(Json(json!({"ok": true})))
     })
     .await
@@ -243,7 +247,7 @@ fn with_store_closed<T>(st: &Shared, after_ok: Option<&str>, after_err: Option<&
     let pw = if out.is_ok() { after_ok } else { after_err };
     let creds = pw.map_or(Credentials::None, Credentials::Password);
     // If this fails the tree simply stays locked and the person unlocks it with the password they have.
-    if let Ok(s) = Store::open_tree(&st.db_path, creds, &opts(st)) {
+    if let Ok(s) = Store::open_tree(&st.db_path(), creds, &opts(st)) {
         install(st, s);
     }
     Ok(out?)
@@ -254,7 +258,7 @@ fn verify_password(st: &Shared, password: &str) -> Result<(), ApiError> {
     if st.locked.load(Ordering::SeqCst) {
         return Err(locked_error());
     }
-    Store::open_tree(&st.db_path, Credentials::Password(password), &opts(st))?.close()?;
+    Store::open_tree(&st.db_path(), Credentials::Password(password), &opts(st))?.close()?;
     Ok(())
 }
 
@@ -270,7 +274,7 @@ struct PasswordReq {
 async fn protect(State(st): State<Shared>, Json(b): Json<PasswordReq>) -> Result<Json<Value>, ApiError> {
     let st2 = st.clone();
     tokio::task::spawn_blocking(move || {
-        let rk = with_store_closed(&st2, Some(&b.new), None, || protect_tree(&st2.db_path, &b.new, st2.kdf, None))?;
+        let rk = with_store_closed(&st2, Some(&b.new), None, || protect_tree(&st2.db_path(), &b.new, st2.kdf, None))?;
         Ok(Json(json!({"ok": true, "recovery_key": rk.as_str()})))
     })
     .await
@@ -281,7 +285,7 @@ async fn unprotect(State(st): State<Shared>, Json(b): Json<PasswordReq>) -> Resu
     let st2 = st.clone();
     tokio::task::spawn_blocking(move || {
         verify_password(&st2, &b.current)?;
-        with_store_closed(&st2, None, Some(&b.current), || unprotect_tree(&st2.db_path, Credentials::Password(&b.current), &opts(&st2), None))?;
+        with_store_closed(&st2, None, Some(&b.current), || unprotect_tree(&st2.db_path(), Credentials::Password(&b.current), &opts(&st2), None))?;
         Ok(Json(json!({"ok": true})))
     })
     .await
@@ -292,7 +296,7 @@ async fn password(State(st): State<Shared>, Json(b): Json<PasswordReq>) -> Resul
     let st2 = st.clone();
     tokio::task::spawn_blocking(move || {
         verify_password(&st2, &b.current)?;
-        with_store_closed(&st2, Some(&b.new), Some(&b.current), || change_password(&st2.db_path, &b.current, &b.new, &opts(&st2), None))?;
+        with_store_closed(&st2, Some(&b.new), Some(&b.current), || change_password(&st2.db_path(), &b.current, &b.new, &opts(&st2), None))?;
         Ok(Json(json!({"ok": true})))
     })
     .await
@@ -314,4 +318,69 @@ async fn auto_lock(State(st): State<Shared>, Json(b): Json<AutoLockReq>) -> Resu
     st.store.lock().unwrap_or_else(|e| e.into_inner()).meta_set(&CTX, AUTO_LOCK_KEY, &b.minutes.to_string())?;
     st.auto_lock_minutes.store(b.minutes, Ordering::Relaxed);
     Ok(Json(json!({"ok": true})))
+}
+
+// ---- where the tree is kept (first run only) ----
+
+/// File in the program's own data folder remembering a folder the person chose for the tree.
+const LOCATION_FILE: &str = "location.txt";
+
+/// The tree file for this start: the folder remembered by an earlier first run, if it still exists.
+pub fn saved_tree_path(data_dir: &std::path::Path) -> std::path::PathBuf {
+    let default = data_dir.join("tree.sqlite");
+    let Ok(text) = std::fs::read_to_string(data_dir.join(LOCATION_FILE)) else { return default };
+    let dir = std::path::PathBuf::from(text.trim());
+    if !text.trim().is_empty() && dir.is_dir() {
+        dir.join("tree.sqlite")
+    } else {
+        default
+    }
+}
+
+/// Ask the person for a folder with the system dialog (window builds only).
+async fn pick_folder() -> Result<Json<Value>, ApiError> {
+    #[cfg(feature = "window")]
+    {
+        let picked = tokio::task::spawn_blocking(crate::window::pick_folder).await.map_err(blocking_err)?;
+        Ok(Json(json!({"path": picked.map(|p| p.display().to_string())})))
+    }
+    #[cfg(not(feature = "window"))]
+    Err(ApiError::new(StatusCode::NOT_IMPLEMENTED, "no_picker", "This build has no folder dialog; type the folder instead."))
+}
+
+#[derive(Deserialize)]
+struct LocationReq {
+    folder: String,
+}
+
+/// First run: keep the tree in another folder. If that folder already holds a tree it is used (and opened when it is
+/// not protected). Refused once a tree exists in the current place, so a tree is never moved behind the person's back.
+async fn location(State(st): State<Shared>, Json(b): Json<LocationReq>) -> Result<Json<Value>, ApiError> {
+    let st2 = st.clone();
+    tokio::task::spawn_blocking(move || {
+        if !st2.locked.load(Ordering::SeqCst) || tree_state(&st2.db_path())? != TreeState::Missing {
+            return Err(ApiError::new(StatusCode::CONFLICT, "exists", "The tree already has a place; this can only be chosen at first run."));
+        }
+        let dir = std::path::PathBuf::from(b.folder.trim());
+        if !dir.is_absolute() {
+            return Err(ApiError::bad_request("Give the full path of the folder, for example C:\\Family or /home/me/family."));
+        }
+        std::fs::create_dir_all(&dir).map_err(|e| ApiError::bad_request(&format!("That folder cannot be created: {e}")))?;
+        let probe = dir.join(".family-write-test");
+        std::fs::write(&probe, b"x").map_err(|e| ApiError::bad_request(&format!("That folder cannot be written to: {e}")))?;
+        let _ = std::fs::remove_file(&probe);
+        let dir = dir.canonicalize().unwrap_or(dir);
+        let default_dir = st2.data_dir.canonicalize().unwrap_or_else(|_| st2.data_dir.clone());
+        let note = st2.data_dir.join(LOCATION_FILE);
+        if dir == default_dir {
+            let _ = std::fs::remove_file(&note);
+        } else {
+            std::fs::write(&note, dir.display().to_string()).map_err(|e| ApiError::bad_request(&format!("The choice could not be saved: {e}")))?;
+        }
+        st2.set_db_path(dir.join("tree.sqlite"));
+        open_if_plain(&st2)?;
+        Ok(Json(json!({"ok": true, "path": st2.db_path().display().to_string(), "state": if st2.locked.load(Ordering::SeqCst) { "locked" } else { "open" }})))
+    })
+    .await
+    .map_err(blocking_err)?
 }

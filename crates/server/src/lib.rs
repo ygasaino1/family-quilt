@@ -54,7 +54,7 @@ pub struct AppState {
     pub activity: Mutex<VecDeque<Activity>>,
     pub quilt: Mutex<quilt::QuiltState>,
     /// The tree file. While `locked` the `store` is an empty placeholder (see `tree`).
-    pub db_path: PathBuf,
+    db_path: Mutex<PathBuf>,
     pub locked: std::sync::atomic::AtomicBool,
     pub last_active: Mutex<std::time::Instant>,
     pub auto_lock_minutes: std::sync::atomic::AtomicU32,
@@ -90,7 +90,7 @@ impl AppState {
 
     fn build_state(store: Store, token: String, data_dir: PathBuf, db_path: PathBuf, locked: bool) -> Shared {
         Arc::new(AppState {
-            db_path,
+            db_path: Mutex::new(db_path),
             locked: locked.into(),
             last_active: Mutex::new(std::time::Instant::now()),
             auto_lock_minutes: Default::default(),
@@ -106,6 +106,15 @@ impl AppState {
             activity: Default::default(),
             quilt: Default::default(),
         })
+    }
+
+    /// The tree file (it can change once, at first run, when the person picks another folder).
+    pub fn db_path(&self) -> PathBuf {
+        self.db_path.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub fn set_db_path(&self, p: PathBuf) {
+        *self.db_path.lock().unwrap_or_else(|e| e.into_inner()) = p;
     }
 
     pub fn log_activity(&self, agent: &str, what: &str) {

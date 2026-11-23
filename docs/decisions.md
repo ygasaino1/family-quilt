@@ -236,3 +236,21 @@ approval stays one undoable batch. Editing an item in place (changing what the a
   First run was green on every step.
 - **Verified only on CI:** the window itself has not been seen by anyone. The CI step only proves the process starts
   and the service answers. Next check: run the CI-built `family-app.exe` on the user's Windows PC.
+
+## Portable by default; choosing the tree's folder (2026-11-23)
+
+- **No installer for v1.** The release is a single `family-app.exe` (in a zip with a short README). Reasons: nothing to
+  install besides the exe, the tree is a file people copy and back up, and an installer would not remove the "unknown
+  publisher" warning (only code signing does). Revisit only if people lack the WebView2 runtime or ask for shortcuts and
+  `.ged` association.
+- WebView2 missing: the window code checks the runtime first and shows a plain message with the download link, and
+  `--browser` is offered as the way out.
+- Data folder: `--data`, `FAMILY_DATA_DIR`, a file named `portable` next to the exe (data goes in `data/` beside it),
+  otherwise `%APPDATA%\FamilyTree`.
+- **First-run folder choice.** The wizard shows where the tree will be kept and has "Change…": the native folder dialog
+  in window builds, a typed full path otherwise. `POST /api/tree/location` (first run only, 409 once a tree exists
+  there) creates and test-writes the folder, remembers it in `location.txt` in the program's data folder, and uses it
+  from then on. A folder that already holds a tree is used (and opened if unprotected). A remembered folder that has
+  vanished falls back to the default place. A tree is never moved behind the person's back.
+- The agent token and endpoint files stay in the program's data folder, not beside the tree.
+- The folder dialog (`rfd`) runs on a worker thread; fine on Windows, would need the main thread on macOS (not a v1 target).
