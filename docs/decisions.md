@@ -221,3 +221,18 @@ approval stays one undoable batch. Editing an item in place (changing what the a
   recovery key once with copy, save-as-file and print. **Not yet:** choosing the data folder (it shows the folder in
   use; the choice needs the native window's folder picker), and the portable marker is only read at start-up.
 - `--fast-kdf-for-tests` (cheap key derivation, no pause after a wrong password) exists for the end-to-end tests only.
+
+## Phase 6, slice 3: window, launch token, Windows CI (2026-11-23)
+
+- Modes of `family-app`: default (native window, when built with cargo feature `window`; otherwise falls back to the
+  browser), `--browser`, `--headless` (server only, used by tests and smoke runs), `--mcp-stdio`.
+- The window (wry + tao + rfd) is behind the `window` feature so the normal build and tests need no WebKitGTK.
+- Each launch makes a random token. The window gets it as a one-time `?t=` link that sets an HttpOnly, SameSite=Strict
+  cookie (`fq_ui`); `/api` on the UI door needs that cookie. Other programs on the PC cannot use the UI door by guessing
+  the port. The agent door keeps its own token.
+- A second copy is detected through `agent-endpoint.json` and told to use the running one.
+- `.github/workflows/windows.yml` (windows-latest): tests, release build with `--features window`, import check (system
+  DLLs only), `tools/app-smoke.py` (headless, Persian-named folder, password, lock), a window-start step, exe artifact.
+  First run was green on every step.
+- **Verified only on CI:** the window itself has not been seen by anyone. The CI step only proves the process starts
+  and the service answers. Next check: run the CI-built `family-app.exe` on the user's Windows PC.
