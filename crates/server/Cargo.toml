@@ -10,7 +10,14 @@ rust-version.workspace = true
 name = "family-app"
 path = "src/main.rs"
 
+[features]
+# The native window (OS web view). Off by default so headless builds and tests need no GUI libraries.
+window = ["dep:wry", "dep:tao", "dep:rfd"]
+
 [dependencies]
+wry = { version = "0.57", optional = true }
+tao = { version = "0.37", optional = true }
+rfd = { version = "0.18", optional = true }
 family-store = { path = "../store" }
 family-review = { path = "../review" }
 family-relate = { path = "../relate" }

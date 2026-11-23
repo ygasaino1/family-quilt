@@ -18,6 +18,8 @@ pub mod token;
 pub mod tree;
 pub mod ui;
 pub mod web;
+#[cfg(feature = "window")]
+pub mod window;
 
 use axum::extract::{Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
@@ -60,6 +62,9 @@ pub struct AppState {
     pub kdf: family_store::KdfParams,
     /// Pause after a wrong password (tests set zero).
     pub wrong_password_delay: std::time::Duration,
+    /// Set when the UI is shown in a window or browser: `/api/*` then also needs the cookie that `?t=` hands out, so
+    /// another program on this computer cannot reach the UI door by forging a header. Unset for headless runs and tests.
+    pub ui_token: std::sync::OnceLock<String>,
 }
 
 pub type Shared = Arc<AppState>;
@@ -91,6 +96,7 @@ impl AppState {
             auto_lock_minutes: Default::default(),
             kdf: family_store::KdfParams::STANDARD,
             wrong_password_delay: std::time::Duration::from_millis(1000),
+            ui_token: Default::default(),
             store: Mutex::new(store),
             token,
             data_dir,
@@ -145,10 +151,15 @@ async fn host_guard(req: Request, next: Next) -> Response {
 }
 
 /// `/api/*`: same-origin browser requests only. Missing header = not a browser request = refused.
-async fn ui_guard(req: Request, next: Next) -> Response {
+async fn ui_guard(State(st): State<Shared>, req: Request, next: Next) -> Response {
     let site = req.headers().get("sec-fetch-site").and_then(|v| v.to_str().ok()).unwrap_or("");
     if site != "same-origin" && site != "none" {
         return deny(StatusCode::FORBIDDEN, "not_same_origin", "this address is only for the app's own window");
+    }
+    if let Some(tok) = st.ui_token.get() {
+        if !web::has_ui_cookie(req.headers(), tok) {
+            return deny(StatusCode::FORBIDDEN, "no_ui_token", "this address is only for the app's own window");
+        }
     }
     next.run(req).await
 }
@@ -185,7 +196,7 @@ pub fn router(state: Shared) -> Router {
         .layer(middleware::from_fn_with_state(state.clone(), tree::agent_lock_guard))
         .layer(middleware::from_fn_with_state(state.clone(), agent_guard));
     let data = ui::routes().layer(middleware::from_fn_with_state(state.clone(), tree::lock_guard));
-    let api = data.merge(tree::routes()).layer(middleware::from_fn(ui_guard));
+    let api = data.merge(tree::routes()).layer(middleware::from_fn_with_state(state.clone(), ui_guard));
     Router::new().nest("/agent", agent).nest("/api", api).fallback(web::serve_asset).layer(middleware::from_fn(host_guard)).with_state(state)
 }
 

@@ -15,7 +15,7 @@ fs.mkdirSync(out, { recursive: true });
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fq-e2e-'));
 const port = 20000 + Math.floor(Math.random() * 20000);
 const base = `http://127.0.0.1:${port}`;
-const srv = spawn(exe, ['--data', dir, '--port', String(port), '--fast-kdf-for-tests'], { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, FAMILY_PORT_AUTO_MAX: '300' } });
+const srv = spawn(exe, ['--data', dir, '--headless', '--port', String(port), '--fast-kdf-for-tests'], { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, FAMILY_PORT_AUTO_MAX: '300' } });
 let srvLog = '';
 srv.stderr.on('data', (d) => (srvLog += d));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

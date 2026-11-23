@@ -163,3 +163,57 @@ async fn idle_locking_follows_the_setting_and_a_tree_with_no_setting_never_locks
     ui(p, "POST", "/api/tree/unlock", Some(json!({"password": "pw pw pw"})));
     assert_eq!(ui(p, "GET", "/api/tree", None).1["auto_lock_minutes"], json!(5));
 }
+
+/// Send raw headers and return the status and the lower-cased header block.
+fn head(port: u16, path: &str, extra: &[(&str, &str)]) -> (u16, String) {
+    let mut r = format!("GET {path} HTTP/1.1\r\nConnection: close\r\nHost: 127.0.0.1:{port}\r\n");
+    for (k, v) in extra {
+        r.push_str(&format!("{k}: {v}\r\n"));
+    }
+    r.push_str("\r\n");
+    let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    s.write_all(r.as_bytes()).unwrap();
+    let mut buf = Vec::new();
+    s.read_to_end(&mut buf).unwrap();
+    let text = String::from_utf8_lossy(&buf).to_lowercase();
+    let h = text.split("\r\n\r\n").next().unwrap_or("").to_string();
+    (h.split_whitespace().nth(1).and_then(|x| x.parse().ok()).unwrap_or(0), h)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn with_a_launch_token_only_the_window_that_was_handed_it_reaches_the_ui_door() {
+    let dir = tempfile::tempdir().unwrap();
+    let st = AppState::new_closed(TOKEN.into(), dir.path().to_path_buf(), dir.path().join("tree.sqlite"), true);
+    st.ui_token.set("launch-secret-123".into()).unwrap();
+    let (p, _h) = serve(st.clone(), 0).await.unwrap();
+    let same = [("Sec-Fetch-Site", "same-origin")];
+    // A program that forges the browser headers still has no cookie.
+    let (c, h) = head(p, "/api/tree", &same);
+    assert_eq!(c, 403, "{h}");
+    let (c, _) = head(p, "/api/tree", &[("Sec-Fetch-Site", "same-origin"), ("Cookie", "fq_ui=wrong")]);
+    assert_eq!(c, 403);
+    // The page itself is served to anyone (it holds no data); a wrong token hands out nothing.
+    let (c, h) = head(p, "/?t=wrong", &[]);
+    assert_eq!(c, 200);
+    assert!(!h.contains("set-cookie"));
+    // The right token hands out the cookie and redirects; with the cookie the door opens.
+    let (c, h) = head(p, "/?t=launch-secret-123", &[]);
+    assert_eq!(c, 303);
+    assert!(h.contains("set-cookie: fq_ui=launch-secret-123") && h.contains("httponly") && h.contains("samesite=strict"), "{h}");
+    let (c, _) = head(p, "/api/tree", &[("Sec-Fetch-Site", "same-origin"), ("Cookie", "other=1; fq_ui=launch-secret-123")]);
+    assert_eq!(c, 200);
+    // The agent door is unaffected (it has its own bearer token).
+    assert_eq!(agent(p, "/agent/v1/guide").0, 423, "locked, but reachable with the agent token");
+    let _ = (&same, &st);
+}
+
+#[test]
+fn a_second_copy_is_noticed_through_the_endpoint_file() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(!family_server::token::already_running(dir.path()));
+    let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    family_server::token::write_endpoint(dir.path(), l.local_addr().unwrap().port()).unwrap();
+    assert!(family_server::token::already_running(dir.path()));
+    drop(l);
+    assert!(!family_server::token::already_running(dir.path()), "a stale file from a crash does not block the start");
+}

@@ -1,7 +1,8 @@
 //! The user interface: plain files from `web/`, compiled into the executable.
 //! Set `FAMILY_WEB_DIR` to serve them from disk instead (for development and tests).
 
-use axum::http::{header, StatusCode, Uri};
+use axum::extract::State;
+use axum::http::{header, HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 
 macro_rules! asset {
@@ -41,7 +42,30 @@ fn mime(path: &str) -> &'static str {
     }
 }
 
-pub async fn serve_asset(uri: Uri) -> Response {
+pub const UI_COOKIE: &str = "fq_ui";
+
+/// Does the request carry the per-launch UI cookie?
+pub fn has_ui_cookie(headers: &HeaderMap, token: &str) -> bool {
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(';'))
+        .filter_map(|kv| kv.trim().strip_prefix(UI_COOKIE).and_then(|r| r.strip_prefix('=')))
+        .any(|v| crate::ct_eq(v.as_bytes(), token.as_bytes()))
+}
+
+/// The page and its scripts. With a UI token set, `/?t=TOKEN` hands out the cookie (HttpOnly, same-site only) and
+/// redirects to `/`; the files themselves hold no data, so they are served to anyone.
+pub async fn serve_asset(State(st): State<crate::Shared>, uri: Uri) -> Response {
+    if let (Some(tok), Some(q)) = (st.ui_token.get(), uri.query()) {
+        if let Some(given) = q.split('&').find_map(|kv| kv.strip_prefix("t=")) {
+            if crate::ct_eq(given.as_bytes(), tok.as_bytes()) {
+                let cookie = format!("{UI_COOKIE}={tok}; Path=/; HttpOnly; SameSite=Strict");
+                return (StatusCode::SEE_OTHER, [(header::LOCATION, "/".to_string()), (header::SET_COOKIE, cookie), (header::CACHE_CONTROL, "no-store".to_string())]).into_response();
+            }
+        }
+    }
     let mut path = uri.path().trim_start_matches('/').to_string();
     if path.is_empty() {
         path = "index.html".into();
