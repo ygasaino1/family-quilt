@@ -54,7 +54,12 @@ jobs:
           tasklist | grep -i family-app || echo "process not running"
           taskkill //F //IM family-app.exe || true
           if ! grep -q "server on" "$RUNNER_TEMP/win.log"; then echo "the app did not start"; exit 1; fi
+      - name: Assemble the portable package
+        shell: bash
+        run: |
+          mkdir -p package/family-tree
+          cp target/release/family-app.exe dist/README.txt dist/portable package/family-tree/
       - uses: actions/upload-artifact@v4
         with:
-          name: family-app-windows
-          path: target/release/family-app.exe
+          name: family-tree-windows-portable
+          path: package

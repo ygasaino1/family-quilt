@@ -3,7 +3,7 @@ import { api } from './api.js';
 import { Quilt } from './quilt.js';
 import { QuiltView } from './view.js';
 import { Minimap } from './minimap.js';
-import { h, toast, icon, fillIcons } from './dom.js';
+import { h, toast, icon, fillIcons, confirmBox } from './dom.js';
 import { pref, setPref } from './prefs.js';
 import * as sidebar from './sidebar.js';
 import * as review from './review.js';
@@ -444,7 +444,20 @@ async function main() {
   $('people-filter').addEventListener('input', loadPeople);
   $('people-add').addEventListener('click', () => sidebar.addFirstPerson());
   window.addEventListener('tree-locked', () => gate.relock());
-  await gate.ensureOpen();
+  const showLock = (on) => ($('nav-lock').hidden = !on);
+  window.addEventListener('tree-protection', (e) => showLock(e.detail));
+  $('nav-lock').addEventListener('click', async () => {
+    await gate.treeAction('lock').catch(() => {});
+    window.dispatchEvent(new Event('tree-locked'));
+  });
+  const opened = await gate.ensureOpen();
+  showLock(!!(opened && opened.protected));
+  // The native window asks before closing when a dialog is open (edits are saved at once; this guards a half-filled form).
+  window.fqCloseRequested = async () => {
+    const quit = () => window.ipc && window.ipc.postMessage('quit');
+    if (document.querySelector('dialog[open]') && !(await confirmBox(t('quit.title'), t('quit.body'), { ok: t('quit.ok') }))) return;
+    quit();
+  };
   const [s, st] = await Promise.all([api('/status'), api('/settings').catch(() => ({}))]);
   app.status = s;
   lastDataKey = s.data_key;

@@ -159,6 +159,7 @@ async function renderSecurity(box, dlg) {
     const c2 = fieldRow('pw-current2', t('gate.current_password'), 'current-password');
     const remove = h('button', { class: 'btn danger-ghost', id: 'set-remove-pw', onclick: () => show(h('div', {}, h('p', { class: 'warn' }, t('settings.remove_warning')), form([c2], t('settings.remove_password'), async () => {
       await treeAction('unprotect', { current: c2.input.value });
+      window.dispatchEvent(new CustomEvent('tree-protection', { detail: false }));
       toast(t('settings.password_removed'));
       await again();
     }))) }, t('settings.remove_password'));
@@ -173,6 +174,7 @@ async function renderSecurity(box, dlg) {
       dlg.close();
       await recoveryScreen(r.recovery_key, document.getElementById('title').textContent);
       hideGate();
+      window.dispatchEvent(new CustomEvent('tree-protection', { detail: true }));
       toast(t('settings.password_set'));
     }))) }, t('settings.set_password'));
     parts.push(h('p', { class: 'muted' }, t('settings.unprotected')), h('div', { class: 'row' }, set), slot);

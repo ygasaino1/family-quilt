@@ -325,6 +325,7 @@ try {
   });
 
   await check('security: set a password, lock, wrong then right password, forgot it and use the recovery key, remove it', async () => {
+    assert.equal(await page.locator('#nav-lock').isHidden(), true); // nothing to lock without a password
     await page.click('#settings');
     await page.click('#set-add-pw');
     await page.fill('#pw-new', 'first password');
@@ -338,9 +339,9 @@ try {
     await page.click('#gate-continue');
     await page.waitForSelector('#gate-recovery', { state: 'detached' });
     assert.equal((await ui('/tree')).protected, true);
-    // lock from Settings: the unlock screen replaces the app and the data is refused
-    await page.click('#settings');
-    await page.click('#set-lock');
+    // lock from the rail button: the unlock screen replaces the app and the data is refused
+    assert.equal(await page.locator('#nav-lock').isVisible(), true);
+    await page.click('#nav-lock');
     await page.waitForSelector('#gate-unlock-card', { timeout: 8000 }).catch(async (e) => { throw new Error(e.message + ' | page: ' + (await page.evaluate(() => (document.querySelector('.gate') ? 'gate shown' : 'no gate')))); });
     assert.equal((await fetch(base + '/api/people?q=Anna', { headers: { 'Sec-Fetch-Site': 'same-origin' } })).status, 423);
     assert.equal(await page.locator('.app').getAttribute('inert'), '');
@@ -369,6 +370,25 @@ try {
     await page.click('#security-form .btn.primary');
     await page.waitForFunction(() => document.getElementById('set-add-pw'));
     assert.equal((await ui('/tree')).protected, false);
+    assert.equal(await page.locator('#nav-lock').isHidden(), true);
+    await page.keyboard.press('Escape');
+  });
+
+  await check('closing the window asks only while a dialog is open', async () => {
+    await page.evaluate(() => { window.__quit = []; window.ipc = { postMessage: (m) => window.__quit.push(m) }; });
+    await page.evaluate(() => window.fqCloseRequested());
+    assert.deepEqual(await page.evaluate(() => window.__quit), ['quit']); // nothing open: closes at once
+    await page.click('#settings');
+    await page.waitForFunction(() => document.getElementById('dlg-settings').open);
+    await page.evaluate(() => { window.__quit = []; });
+    await page.evaluate(() => { window.fqCloseRequested().catch((e) => (window.__qerr = String(e))); });
+    await page.waitForFunction(() => document.querySelectorAll('dialog[open]').length === 2).catch(async (e) => { throw new Error(e.message + ' | ' + (await page.evaluate(() => window.__qerr + ' ' + [...document.querySelectorAll('dialog')].map((d) => d.id + ':' + d.open).join(',')))); });
+    await page.click('dialog[open]:last-of-type .actions .btn:not(.primary)'); // Cancel
+    assert.deepEqual(await page.evaluate(() => window.__quit), []);
+    await page.evaluate(() => { window.fqCloseRequested(); });
+    await page.waitForFunction(() => document.querySelectorAll('dialog[open]').length === 2);
+    await page.click('dialog[open]:last-of-type .actions .btn.primary'); // Close anyway
+    await page.waitForFunction(() => window.__quit.length === 1);
     await page.keyboard.press('Escape');
   });
 

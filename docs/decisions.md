@@ -254,3 +254,19 @@ approval stays one undoable batch. Editing an item in place (changing what the a
   vanished falls back to the default place. A tree is never moved behind the person's back.
 - The agent token and endpoint files stay in the program's data folder, not beside the tree.
 - The folder dialog (`rfd`) runs on a worker thread; fine on Windows, would need the main thread on macOS (not a v1 target).
+
+## Phase 6, slice 4: lock button, close guard, icon, portable package (2026-11-24)
+
+- **Rail lock button** (padlock above Settings), shown only while the tree has a password; Settings still has "Lock now".
+  Setting or removing a password shows or hides it at once.
+- **Closing the window.** The native close request is passed to the page (`window.fqCloseRequested`); the page asks
+  "Close anyway?" only if a dialog is open (edits are saved the moment they are made, so only a half-filled form can be
+  lost), then tells the window to quit over the web view's message channel. If the page cannot answer, the window closes.
+  Idle auto-lock and the lock on exit are unchanged.
+- **Icon.** A small quilt (generations as rows of patches), drawn by `tools/make-icon.py` into `crates/server/assets`
+  (`icon.ico` for the exe, `icon-64.rgba` for the window). Windows builds embed it through `build.rs` (winresource); a
+  missing resource compiler only warns.
+- **Package.** CI uploads `family-tree-windows-portable`: `family-tree/family-app.exe`, an empty `portable` marker (data
+  goes in `data/` beside the exe) and `README.txt` from `dist/`. Downloads from GitHub arrive zipped.
+- **Verified only on CI / by you:** the close request, the window icon and the exe icon cannot be exercised in this
+  sandbox; the page side (lock button, close answer) is covered by the browser tests.
