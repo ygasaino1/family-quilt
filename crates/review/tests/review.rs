@@ -107,7 +107,8 @@ fn proposed_change_leaves_record_alone_until_approval_and_applies_only_accepted_
     assert_eq!(v.changes[0].fields.len(), 3);
 
     let cid = r.changes[0].id.clone();
-    let req = ApproveRequest { decisions: vec![ChangeDecision { change_id: cid.clone(), accept: true, fields: Some(vec!["birth_date".into(), "note".into()]), overwrite: vec![] }] };
+    let req =
+        ApproveRequest { decisions: vec![ChangeDecision { change_id: cid.clone(), accept: true, fields: Some(vec!["birth_date".into(), "note".into()]), overwrite: vec![] }], ..Default::default() };
     let rep = approve(&mut f.s, &r.proposal_id, &req, "human").unwrap();
     assert_eq!(rep.changes_applied, 1);
     let after = f.s.get_person(&CTX, &f.kid).unwrap();
@@ -139,7 +140,7 @@ fn stale_from_is_rejected_at_submit_and_flagged_after() {
     // A second proposal, overwritten on purpose.
     let r2 = submit(&mut f.s, "a", &change_person(&f.kid, "birth_date", json!("1959"), json!("1962"))).unwrap();
     f.s.update_person(&CTX, &f.kid, PersonPatch { birth: Field::Set(FuzzyDate::exact("1958").unwrap()), ..Default::default() }, "human").unwrap();
-    let req = ApproveRequest { decisions: vec![ChangeDecision { change_id: r2.changes[0].id.clone(), accept: true, fields: None, overwrite: vec!["birth_date".into()] }] };
+    let req = ApproveRequest { decisions: vec![ChangeDecision { change_id: r2.changes[0].id.clone(), accept: true, fields: None, overwrite: vec!["birth_date".into()] }], ..Default::default() };
     approve(&mut f.s, &r2.proposal_id, &req, "human").unwrap();
     assert_eq!(f.s.get_person(&CTX, &f.kid).unwrap().birth.unwrap().date.to_string(), "1962");
 }
@@ -326,7 +327,7 @@ fn person_removal_is_a_proposal_with_impact_note_and_needs_an_explicit_tick() {
     assert!(f.s.get_person(&CTX, &f.dad).is_ok());
     // Second proposal, ticked.
     let r2 = submit(&mut f.s, "a", &body).unwrap();
-    let req = ApproveRequest { decisions: vec![ChangeDecision { change_id: r2.changes[0].id.clone(), accept: true, fields: None, overwrite: vec![] }] };
+    let req = ApproveRequest { decisions: vec![ChangeDecision { change_id: r2.changes[0].id.clone(), accept: true, fields: None, overwrite: vec![] }], ..Default::default() };
     let rep = approve(&mut f.s, &r2.proposal_id, &req, "human").unwrap();
     assert_eq!(rep.people_removed, 1);
     assert!(f.s.get_person(&CTX, &f.dad).is_err());
@@ -340,4 +341,61 @@ fn person_removal_is_a_proposal_with_impact_note_and_needs_an_explicit_tick() {
     let a = submit(&mut f.s, "a", &json!({"summary": "x", "people": [{"ref": "n", "full_name": "Pending Pat"}]})).unwrap();
     let e = errors(submit(&mut f.s, "b", &json!({"summary": "x", "changes": [{"target_type": "person", "target_id": a.people[0].id, "op": "remove"}]})));
     assert_eq!(e[0].1, "pending_target");
+}
+
+#[test]
+fn approving_can_leave_out_a_person_and_a_link_and_the_rest_goes_through() {
+    let mut f = fam();
+    let body = json!({
+        "summary": "Add Zoe and Yan", "source_text": "Zoe and Yan are Kim's children",
+        "people": [{"ref": "z", "given_name": "Zoe", "family_name": "Tester", "sex": "F", "birth_date": "1990"},
+                   {"ref": "y", "given_name": "Yan", "family_name": "Tester", "sex": "M", "birth_date": "1992"},
+                   {"ref": "w", "given_name": "Wes", "family_name": "Tester", "sex": "M", "birth_date": "1994"}],
+        "relationships": [{"type": "parent_child", "a": f.kid, "b": "z", "kind": "birth"},
+                          {"type": "parent_child", "a": f.kid, "b": "y", "kind": "birth"},
+                          {"type": "parent_child", "a": f.kid, "b": "w", "kind": "birth"}]
+    });
+    let r = submit(&mut f.s, "a", &body).unwrap();
+    let v = review(&f.s, &r.proposal_id).unwrap();
+    let id_of = |name: &str| v.new_people.iter().find(|p| p.display_name.starts_with(name)).unwrap().id.clone();
+    let (zoe, yan, wes) = (id_of("Zoe"), id_of("Yan"), id_of("Wes"));
+    // leave out Yan (his link must go with him) and only the link to Wes (Wes himself is approved, unlinked)
+    let wes_link = v.new_relationships.iter().find(|l| l.rel.person_b == wes).unwrap().rel.id.clone();
+    let req = ApproveRequest { exclude_people: vec![yan.clone()], exclude_relationships: vec![wes_link], ..Default::default() };
+    let rep = approve(&mut f.s, &r.proposal_id, &req, "human").unwrap();
+    assert_eq!((rep.people_verified, rep.relationships_verified), (2, 1));
+    assert_eq!((rep.people_excluded, rep.relationships_excluded), (1, 2));
+    assert_eq!(f.s.get_proposal(&CTX, &r.proposal_id).unwrap().status, "approved");
+    assert_eq!(query::search(&f.s, "Zoe", 10, false).unwrap().len(), 1);
+    assert_eq!(query::search(&f.s, "Wes", 10, false).unwrap().len(), 1);
+    assert!(query::search(&f.s, "Yan", 10, true).unwrap().is_empty(), "the person left out is gone");
+    let g = query::load_graph(&f.s, false).unwrap();
+    assert!(g.index_of(&zoe).is_some() && g.index_of(&wes).is_some() && g.index_of(&yan).is_none());
+    assert_eq!(f.s.relationships_of(&CTX, &wes).unwrap().len(), 0);
+    assert_eq!(f.s.relationships_of(&CTX, &zoe).unwrap().len(), 1);
+    // the approval is one undoable batch: everything it did is tagged with the proposal
+    assert!(f.s.revisions_of(&CTX, "person", &yan).unwrap().iter().all(|r| r.proposal_id.is_some()));
+}
+
+#[test]
+fn leaving_out_unknown_items_is_refused_and_nothing_changes() {
+    let mut f = fam();
+    let r = submit(&mut f.s, "a", &json!({"summary": "x", "people": [{"ref": "n", "full_name": "New Person"}]})).unwrap();
+    for req in [ApproveRequest { exclude_people: vec![f.kid.clone()], ..Default::default() }, ApproveRequest { exclude_relationships: vec![f.link_dk.clone()], ..Default::default() }] {
+        assert!(matches!(approve(&mut f.s, &r.proposal_id, &req, "human"), Err(ReviewError::Invalid(_))));
+    }
+    assert_eq!(f.s.get_proposal(&CTX, &r.proposal_id).unwrap().status, "pending");
+    assert_eq!(query::search(&f.s, "New Person", 10, false).unwrap().len(), 0, "still pending");
+}
+
+#[test]
+fn leaving_out_a_person_other_proposals_link_to_removes_those_links_and_says_so() {
+    let mut f = fam();
+    let first = submit(&mut f.s, "a", &json!({"summary": "Add Zoe", "people": [{"ref": "z", "given_name": "Zoe", "family_name": "T", "sex": "F"}]})).unwrap();
+    let zoe = first.people[0].id.clone();
+    let second = submit(&mut f.s, "b", &json!({"summary": "Zoe's mother", "relationships": [{"type": "parent_child", "a": f.kid, "b": zoe, "kind": "birth"}]})).unwrap();
+    let req = ApproveRequest { exclude_people: vec![zoe.clone()], ..Default::default() };
+    let rep = approve(&mut f.s, &first.proposal_id, &req, "human").unwrap();
+    assert_eq!(rep.affected_proposals, vec![second.proposal_id.clone()]);
+    assert!(f.s.relationships_of(&CTX, &f.kid).unwrap().iter().all(|r| r.person_b != zoe));
 }

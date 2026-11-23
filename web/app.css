@@ -163,6 +163,8 @@ body.privacy #side:hover, body.privacy #side:focus-within { filter: none; }
 .item-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-block-end: 1px solid var(--line); }
 .item-row:last-child { border-block-end: 0; }
 .waiting { font-size: .68rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; background: color-mix(in srgb, var(--pending) 22%, transparent); color: var(--pending); padding: 2px 8px; border-radius: 6px; }
+.item-row.out .nm, .item-row.out .waiting { text-decoration: line-through; opacity: .5; }
+.item-row .btn.tiny[aria-pressed="true"] { background: var(--danger); border-color: var(--danger); color: var(--panel); }
 .item-row .nm { flex: 1 1 auto; font-weight: 600; font-size: .92rem; }
 .sugg { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-block: 6px; font-size: .9rem; }
 .sugg .what { flex: 1 1 auto; color: var(--muted); }

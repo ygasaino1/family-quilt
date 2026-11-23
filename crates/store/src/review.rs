@@ -171,6 +171,12 @@ impl Store {
     /// Approve: this proposal's pending people and links become verified (one revision each).
     pub fn verify_proposal_records(&mut self, ctx: &AccessContext, proposal_id: &str, by: &str) -> Result<ProposalRecords> {
         let recs = self.proposal_records(ctx, proposal_id)?;
+        self.verify_records(proposal_id, &recs, by)?;
+        Ok(recs)
+    }
+
+    /// Verify exactly these records of the proposal (the rest of an approval that left some items out).
+    pub fn verify_records(&mut self, proposal_id: &str, recs: &ProposalRecords, by: &str) -> Result<()> {
         for (table, ids) in [("person", &recs.people), ("relationship", &recs.relationships)] {
             for id in ids {
                 let before = snapshot(&self.conn, table, id)?;
@@ -179,12 +185,18 @@ impl Store {
                 write_revision(&self.conn, table, id, before.as_ref(), after.as_ref(), by, Some(proposal_id))?;
             }
         }
-        Ok(recs)
+        Ok(())
     }
 
     /// Reject: this proposal's pending people and links are soft-deleted (they were never visible as verified data).
     pub fn discard_proposal_records(&mut self, ctx: &AccessContext, proposal_id: &str, by: &str) -> Result<ProposalRecords> {
         let recs = self.proposal_records(ctx, proposal_id)?;
+        self.discard_records(proposal_id, &recs, by)?;
+        Ok(recs)
+    }
+
+    /// Soft-delete exactly these pending records (links first, then people).
+    pub fn discard_records(&mut self, proposal_id: &str, recs: &ProposalRecords, by: &str) -> Result<()> {
         let t = now_iso();
         for (table, ids) in [("relationship", &recs.relationships), ("person", &recs.people)] {
             for id in ids {
@@ -194,7 +206,7 @@ impl Store {
                 write_revision(&self.conn, table, id, before.as_ref(), after.as_ref(), by, Some(proposal_id))?;
             }
         }
-        Ok(recs)
+        Ok(())
     }
 
     /// A marker for [`Store::tag_revisions_since`]: ids are strictly increasing, so a fresh id sorts before every revision written after it.

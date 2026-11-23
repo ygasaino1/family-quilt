@@ -275,6 +275,28 @@ try {
     assert.equal(found.people.length, 0);
   });
 
+  await check('review: a new person can be left out of the approval, and their link goes with them', async () => {
+    await agent('/proposals', {
+      summary: 'Add Ivy and Jon',
+      people: [{ ref: 'i', given_name: 'Ivy', family_name: 'Leftin', sex: 'F' }, { ref: 'j', given_name: 'Jon', family_name: 'Leftout', sex: 'M' }],
+      relationships: [{ type: 'parent_child', a: anna.id, b: 'i', kind: 'birth' }, { type: 'parent_child', a: anna.id, b: 'j', kind: 'birth' }],
+    });
+    await page.click('#nav-review');
+    await page.waitForSelector('#review-approve', { timeout: 12000 });
+    const rows = page.locator('.item-row', { hasText: 'Jon' });
+    await rows.first().locator('button[aria-pressed]').click();
+    // his link is dimmed with him and cannot be toggled on its own
+    assert.equal(await page.locator('.item-row.out').count(), 2);
+    assert.equal(await page.locator('.item-row.out button[aria-pressed][disabled]').count(), 1);
+    assert.match(await page.textContent('#review-approve'), /leaving out 2/i);
+    await page.click('#review-approve');
+    await page.waitForFunction(() => document.getElementById('review-badge').hidden, null, { timeout: 8000 });
+    assert.equal((await ui('/people?q=Ivy')).people.length, 1);
+    assert.equal((await ui('/people?q=Jon')).people.length, 0);
+    await ui('/people/' + (await ui('/people?q=Ivy')).people[0].id, 'DELETE');
+    await page.click('#nav-quilt');
+  });
+
   await check('keyboard: arrows pan, + and - zoom, 0 fits; toolbar targets are at least 44 px', async () => {
     await page.click('#nav-quilt');
     await page.focus('#quilt');

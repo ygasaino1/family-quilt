@@ -60,14 +60,45 @@ async function renderDetail(box, id) {
   const blocked = v.depends_on.filter((d) => d.status === 'pending');
   const checks = []; // {change, field, box, conflict, over}
 
+  // New people and links can each be left out of the approval (the ✕ on the row); a left-out person takes their links along.
+  const leftOut = new Set();
+  const rows = []; // {el, kind: 'person'|'link', id, a, b}
+  const syncOut = () => {
+    for (const r of rows) {
+      const own = leftOut.has(r.id);
+      const viaPerson = r.kind === 'link' && (leftOut.has(r.a) || leftOut.has(r.b));
+      r.el.classList.toggle('out', own || viaPerson);
+      r.btn.setAttribute('aria-pressed', String(own || viaPerson));
+      r.btn.disabled = viaPerson && !own;
+      r.btn.title = r.btn.getAttribute('aria-label') + (viaPerson && !own ? ' ' + t('review.left_out_with_person') : '');
+    }
+    const n = rows.filter((r) => r.el.classList.contains('out')).length;
+    const ap = document.getElementById('review-approve');
+    if (ap) ap.textContent = n ? t('review.approve_rest', { n }) : t('review.approve');
+  };
+  const leaveOutBtn = (r) => {
+    r.btn = h('button', { class: 'btn tiny', 'aria-pressed': 'false', 'aria-label': t('review.leave_out'), title: t('review.leave_out'), onclick: () => {
+      if (leftOut.has(r.id)) leftOut.delete(r.id);
+      else leftOut.add(r.id);
+      syncOut();
+    } }, icon('close', 14));
+    rows.push(r);
+    return r.btn;
+  };
   const items = [];
   for (const q of v.new_people) {
-    items.push(h('div', { class: 'item-row' }, h('span', { class: 'waiting' }, t('review.waiting')), h('span', { class: 'nm' }, q.display_name, born(q) ? ` · ${born(q)} –` : ''),
-      h('button', { class: 'link', title: t('review.show_in_tree'), 'aria-label': t('review.show_in_tree'), onclick: () => app.view.q && app.openPerson(q.id) }, icon('tree', 16))));
+    const r = { kind: 'person', id: q.id };
+    const btn = leaveOutBtn(r);
+    r.el = h('div', { class: 'item-row' }, h('span', { class: 'waiting' }, t('review.waiting')), h('span', { class: 'nm' }, q.display_name, born(q) ? ` · ${born(q)} –` : ''),
+      h('button', { class: 'link', title: t('review.show_in_tree'), 'aria-label': t('review.show_in_tree'), onclick: () => app.view.q && app.openPerson(q.id) }, icon('tree', 16)), btn);
+    items.push(r.el);
   }
-  for (const r of v.new_relationships) {
-    items.push(h('div', { class: 'item-row' }, h('span', { class: 'waiting' }, t('review.waiting')), h('span', { class: 'nm' },
-      r.rel_type === 'parent_child' ? t('review.link_parent', { a: r.a_name, b: r.b_name, kind: t('kind.' + (r.kind || 'unknown')) }) : t('review.link_partner', { a: r.a_name, b: r.b_name, state: t('state.' + (r.subtype || 'unknown') + '.long') }))));
+  for (const l of v.new_relationships) {
+    const r = { kind: 'link', id: l.id, a: l.person_a, b: l.person_b };
+    const btn = leaveOutBtn(r);
+    r.el = h('div', { class: 'item-row' }, h('span', { class: 'waiting' }, t('review.waiting')), h('span', { class: 'nm' },
+      l.rel_type === 'parent_child' ? t('review.link_parent', { a: l.a_name, b: l.b_name, kind: t('kind.' + (l.kind || 'unknown')) }) : t('review.link_partner', { a: l.a_name, b: l.b_name, state: t('state.' + (l.subtype || 'unknown') + '.long') })), btn);
+    items.push(r.el);
   }
 
   const changeBlocks = [];
@@ -105,14 +136,14 @@ async function renderDetail(box, id) {
     changeBlocks.length ? [h('p', { class: 'eyebrow', style: 'margin-top:14px' }, t('review.suggested')), changeBlocks] : null,
     deps, warns,
     h('div', { class: 'actions' },
-      h('button', { class: 'btn primary', id: 'review-approve', disabled: blocked.length > 0, onclick: () => doApprove(id, checks) }, t('review.approve')),
+      h('button', { class: 'btn primary', id: 'review-approve', disabled: blocked.length > 0, onclick: () => doApprove(id, checks, leftOut, v) }, t('review.approve')),
       h('button', { class: 'btn', id: 'review-reject', onclick: () => doReject(id) }, t('review.reject'))));
   // Show the proposal's people in the quilt: pending rows already carry the amber frame.
   const first = v.new_people[0];
   if (first && app.view.q?.idRow.has(first.id)) app.view.centerOnRow(app.view.q.idRow.get(first.id), true);
 }
 
-async function doApprove(id, checks) {
+async function doApprove(id, checks, leftOut, v) {
   const byChange = new Map();
   for (const c of checks) {
     const e = byChange.get(c.change.id) || { change_id: c.change.id, fields: [], overwrite: [], any: false };
@@ -128,8 +159,12 @@ async function doApprove(id, checks) {
   }
   const decisions = [...byChange.values()].map((e) => ({ change_id: e.change_id, accept: e.any, fields: e.fields.length ? e.fields : null, overwrite: e.overwrite }));
   try {
-    const r = await api(`/proposals/${id}/approve`, { method: 'POST', body: { decisions } });
+    const exclude_people = v.new_people.filter((q) => leftOut.has(q.id)).map((q) => q.id);
+    const exclude_relationships = v.new_relationships.filter((l) => leftOut.has(l.id)).map((l) => l.id);
+    const r = await api(`/proposals/${id}/approve`, { method: 'POST', body: { decisions, exclude_people, exclude_relationships } });
     toast(t('review.approved', { people: r.people_verified, links: r.relationships_verified, changes: r.changes_applied }));
+    if (r.people_excluded || r.relationships_excluded) toast(t('review.left_out', { people: r.people_excluded, links: r.relationships_excluded }));
+    if (r.affected_proposals?.length) toast(t('review.affected', { n: r.affected_proposals.length }));
     if (r.conflicts_skipped?.length) toast(t('review.skipped', { n: r.conflicts_skipped.length }), 'error');
     if (r.removals_not_confirmed?.length) toast(t('review.removals_left', { n: r.removals_not_confirmed.length }));
     await app.refreshAll();

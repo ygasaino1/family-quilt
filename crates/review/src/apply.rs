@@ -32,6 +32,12 @@ pub struct ChangeDecision {
 pub struct ApproveRequest {
     #[serde(default)]
     pub decisions: Vec<ChangeDecision>,
+    /// New people of this proposal to leave out. Their links go with them, and so do this proposal's edits to them.
+    #[serde(default)]
+    pub exclude_people: Vec<String>,
+    /// New links of this proposal to leave out.
+    #[serde(default)]
+    pub exclude_relationships: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -44,6 +50,11 @@ pub struct ApproveReport {
     /// Changes (or fields) left unapplied because the record changed; the proposal is still approved for the rest.
     pub conflicts_skipped: Vec<String>,
     pub people_removed: usize,
+    /// New people and links the human left out of this approval (links of a left-out person included).
+    pub people_excluded: usize,
+    pub relationships_excluded: usize,
+    /// Other proposals that lost a link or an edit because a person they used was left out.
+    pub affected_proposals: Vec<String>,
     /// Proposed person removals left alone because they were not ticked explicitly.
     pub removals_not_confirmed: Vec<String>,
     pub warnings: Vec<Warning>,
@@ -84,18 +95,79 @@ pub fn approve(store: &mut Store, proposal_id: &str, req: &ApproveRequest, by: &
         changes_rejected: 0,
         conflicts_skipped: vec![],
         people_removed: 0,
+        people_excluded: 0,
+        relationships_excluded: 0,
+        affected_proposals: vec![],
         removals_not_confirmed: vec![],
         warnings,
     };
+    // Items left out: a left-out person takes their links along; other proposals' links to them would dangle.
+    let recs = store.proposal_records(&CTX, proposal_id)?;
+    let mut bad: Vec<FieldError> = vec![];
+    for (i, id) in req.exclude_people.iter().enumerate() {
+        if !recs.people.contains(id) {
+            bad.push(FieldError::new(format!("exclude_people[{i}]"), "unknown_id", format!("'{id}' is not a new person of this proposal")));
+        }
+    }
+    for (i, id) in req.exclude_relationships.iter().enumerate() {
+        if !recs.relationships.contains(id) {
+            bad.push(FieldError::new(format!("exclude_relationships[{i}]"), "unknown_id", format!("'{id}' is not a new link of this proposal")));
+        }
+    }
+    if !bad.is_empty() {
+        return Err(ReviewError::Invalid(bad));
+    }
+    let mut out_people: Vec<String> = req.exclude_people.clone();
+    out_people.sort();
+    out_people.dedup();
+    let mut out_rels: Vec<String> = req.exclude_relationships.clone();
+    let mut orphan_links: Vec<(String, Option<String>)> = vec![];
+    let mut orphan_changes: Vec<(String, String)> = vec![];
+    for pid in &out_people {
+        for r in store.relationships_of(&CTX, pid)? {
+            if r.proposal_id.as_deref() == Some(proposal_id) {
+                out_rels.push(r.id);
+            } else {
+                orphan_links.push((r.id.clone(), r.proposal_id.clone()));
+            }
+        }
+        for c in store.open_changes_for(&CTX, "person", pid)? {
+            if c.proposal_id != proposal_id {
+                orphan_changes.push((c.id, c.proposal_id));
+            }
+        }
+    }
+    out_rels.sort();
+    out_rels.dedup();
+    let keep = family_store::ProposalRecords {
+        people: recs.people.iter().filter(|id| !out_people.contains(id)).cloned().collect(),
+        relationships: recs.relationships.iter().filter(|id| !out_rels.contains(id)).cloned().collect(),
+    };
+    let out = family_store::ProposalRecords { people: out_people.clone(), relationships: out_rels.clone() };
     let marker = store.revision_marker();
     let rep = &mut report;
     store.atomic(|s| {
-        let recs = s.verify_proposal_records(&CTX, proposal_id, by)?;
-        rep.people_verified = recs.people.len();
-        rep.relationships_verified = recs.relationships.len();
+        for (id, _) in &orphan_links {
+            s.remove_relationship(&CTX, id, by)?;
+        }
+        for (id, _) in &orphan_changes {
+            s.set_change_status(&CTX, id, "conflicting")?;
+        }
+        s.verify_records(proposal_id, &keep, by)?;
+        s.discard_records(proposal_id, &out, by)?;
+        rep.people_verified = keep.people.len();
+        rep.relationships_verified = keep.relationships.len();
+        rep.people_excluded = out.people.len();
+        rep.relationships_excluded = out.relationships.len();
         for c in &changes {
             let v = &views[&c.id];
             let d = decisions.get(c.id.as_str());
+            if out.people.contains(&c.target_id) || out.relationships.contains(&c.target_id) {
+                // an edit to something that was left out
+                s.set_change_status(&CTX, &c.id, "rejected")?;
+                rep.changes_rejected += 1;
+                continue;
+            }
             if d.is_some_and(|d| !d.accept) {
                 s.set_change_status(&CTX, &c.id, "rejected")?;
                 rep.changes_rejected += 1;
@@ -168,6 +240,10 @@ pub fn approve(store: &mut Store, proposal_id: &str, req: &ApproveRequest, by: &
         s.tag_revisions_since(&marker, proposal_id)?;
         Ok(())
     })?;
+    let mut affected: Vec<String> = orphan_links.into_iter().filter_map(|(_, p)| p).chain(orphan_changes.into_iter().map(|(_, p)| p)).collect();
+    affected.sort();
+    affected.dedup();
+    report.affected_proposals = affected;
     let _ = norm;
     Ok(report)
 }

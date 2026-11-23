@@ -111,7 +111,7 @@ Phase 1 needs crates.io. Network for package installs was blocked in the Phase 0
 - Culling: row y and column x are strictly ascending, so the visible range is found by bisection; the glide interpolates the four position arrays (row y and name x, column x and header y). 59-60 frames/s on 10,756 people / 5,151 columns, draw time under 0.3 ms.
 - Not copied from the original: its zoomed-out grey generation blocks (lines thin out instead), its fixed header "F" (ours is the partnership state).
 
-**Chrome (matches the UI2 mock-up).** Left icon rail (tree, people, review with badge, agent, settings), top bar (back/forward through selections, tree title, search with prev/next, export, privacy eye, bell), floating zoom controls with a View popover (label mode, layout mode, highlight, blood toggle, search options, outlines), minimap and legend. Review is a docked panel beside the quilt (agent and time, your words, what was understood, suggested changes with Accept ticks, warnings, approve/reject). Not done: per-item exclude/edit icons (needs partial approval in the backend).
+**Chrome (matches the UI2 mock-up).** Left icon rail (tree, people, review with badge, agent, settings), top bar (back/forward through selections, tree title, search with prev/next, export, privacy eye, bell), floating zoom controls with a View popover (label mode, layout mode, highlight, blood toggle, search options, outlines), minimap and legend. Review is a docked panel beside the quilt (agent and time, your words, what was understood, suggested changes with Accept ticks, warnings, approve/reject). Per-item exclude icons are done (see "Leaving items out of an approval"); editing an item in place is not.
 
 **Selection.** Click a cell or name = that person's row; click a header = that column's family; shift-click adds another selection in the next free colour (7 colours); a click on empty space clears. Selection never moves the view (tested). Highlight modes cycle (ancestors and descendants / only the selection / ancestors / descendants) with a blood-only / whole-family toggle (blood = birth links only). During the end-of-layout glide, clicks pick what is drawn, not where it is going.
 
@@ -197,3 +197,12 @@ By the on-screen width of one column (`LOD_BLOCKS` 0.6 px, `LOD_GRID` 3 px in `w
 generation is one solid grey block (as in the original); up to 3 px the grid fades out and the marks stay (never
 thinner than a screen pixel); above that everything is drawn. This replaces "lines thin out" in the earlier note.
 The thresholds are first guesses, to be tuned by use after v1.
+
+### Leaving items out of an approval (2026-11-23)
+
+The review panel has a ✕ on every new person and link of a proposal. `POST /proposals/{id}/approve` takes
+`exclude_people` and `exclude_relationships` (ids must belong to the proposal, otherwise a field error and nothing
+changes). A left-out person takes their links along; this proposal's edits to left-out items are marked rejected; links
+other pending proposals made to a left-out person are removed and those proposals are reported (`affected_proposals`),
+the same way rejecting does. Left-out records are soft-deleted with revisions tagged with the proposal, so the
+approval stays one undoable batch. Editing an item in place (changing what the agent proposed) is still not done.
