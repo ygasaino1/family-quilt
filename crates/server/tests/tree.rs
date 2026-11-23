@@ -239,11 +239,12 @@ async fn first_run_can_choose_another_folder_and_remembers_it() {
     assert!(folder.join("tree.sqlite").exists());
     assert!(!s.dir.path().join("tree.sqlite").exists());
     // The next start finds it through the remembered choice.
-    assert_eq!(tree::saved_tree_path(s.dir.path()), folder.canonicalize().unwrap().join("tree.sqlite"));
+    assert_eq!(tree::saved_tree_path(s.dir.path()), folder.join("tree.sqlite"));
     // Once a tree is open the place cannot be changed.
     let (c, v) = ui(p, "POST", "/api/tree/location", Some(json!({"folder": other.path().to_str().unwrap()})));
     assert_eq!(c, 409, "{v}");
     // A remembered folder that vanished falls back to the default place.
+    tree::lock_now(&s.st); // Windows cannot delete a file that is still open
     drop(other);
     assert_eq!(tree::saved_tree_path(s.dir.path()), s.dir.path().join("tree.sqlite"));
     // Without the window feature the dialog is not offered.

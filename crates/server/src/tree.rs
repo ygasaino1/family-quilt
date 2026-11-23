@@ -369,10 +369,8 @@ async fn location(State(st): State<Shared>, Json(b): Json<LocationReq>) -> Resul
         let probe = dir.join(".family-write-test");
         std::fs::write(&probe, b"x").map_err(|e| ApiError::bad_request(&format!("That folder cannot be written to: {e}")))?;
         let _ = std::fs::remove_file(&probe);
-        let dir = dir.canonicalize().unwrap_or(dir);
-        let default_dir = st2.data_dir.canonicalize().unwrap_or_else(|_| st2.data_dir.clone());
         let note = st2.data_dir.join(LOCATION_FILE);
-        if dir == default_dir {
+        if dir == st2.data_dir {
             let _ = std::fs::remove_file(&note);
         } else {
             std::fs::write(&note, dir.display().to_string()).map_err(|e| ApiError::bad_request(&format!("The choice could not be saved: {e}")))?;
