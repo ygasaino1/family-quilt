@@ -206,3 +206,18 @@ changes). A left-out person takes their links along; this proposal's edits to le
 other pending proposals made to a left-out person are removed and those proposals are reported (`affected_proposals`),
 the same way rejecting does. Left-out records are soft-deleted with revisions tagged with the proposal, so the
 approval stays one undoable batch. Editing an item in place (changing what the agent proposed) is still not done.
+
+## Phase 6, slice 1-2: first run, lock, passwords (2026-11-23)
+
+- `family-app` starts with no tree open. An unprotected tree opens at once; a missing one shows the first-run wizard; a
+  protected one shows the unlock screen. While nothing is open the shared store is an **empty in-memory placeholder**
+  and every data route on both doors answers `423 locked`, so agents cannot get around the lock.
+- `/api/tree` (state), `/create`, `/unlock` (password or recovery key), `/lock`, `/reset` (recovery key + new password),
+  `/protect`, `/unprotect`, `/password`, `/auto-lock`. Passwords are checked before anything is closed, so a wrong
+  "current password" changes nothing. Locking drops the store (the key is zeroed) and the cached quilt pictures.
+- Auto-lock is a setting in the file (`setting:auto_lock_minutes`); only requests from the window count as activity
+  (the 5 s status poll and the layout progress poll do not).
+- The wizard asks for a name, an optional password (at least 8 characters) and an optional GEDCOM file, and shows the
+  recovery key once with copy, save-as-file and print. **Not yet:** choosing the data folder (it shows the folder in
+  use; the choice needs the native window's folder picker), and the portable marker is only read at start-up.
+- `--fast-kdf-for-tests` (cheap key derivation, no pause after a wrong password) exists for the end-to-end tests only.

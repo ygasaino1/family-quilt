@@ -21,6 +21,9 @@ export async function api(path, { method = 'GET', body } = {}) {
   } catch {
     data = { message: text };
   }
-  if (!res.ok) throw new ApiError(res.status, data);
+  if (!res.ok) {
+    if (res.status === 423 && data && data.error && data.error.code === 'locked') window.dispatchEvent(new Event('tree-locked'));
+    throw new ApiError(res.status, data);
+  }
   return data;
 }

@@ -8,6 +8,7 @@ import { pref, setPref } from './prefs.js';
 import * as sidebar from './sidebar.js';
 import * as review from './review.js';
 import * as settings from './settings.js';
+import * as gate from './gate.js';
 import * as exporter from './export.js';
 
 const $ = (id) => document.getElementById(id);
@@ -442,6 +443,8 @@ async function main() {
   $('nav-review').addEventListener('click', () => showScreen('review'));
   $('people-filter').addEventListener('input', loadPeople);
   $('people-add').addEventListener('click', () => sidebar.addFirstPerson());
+  window.addEventListener('tree-locked', () => gate.relock());
+  await gate.ensureOpen();
   const [s, st] = await Promise.all([api('/status'), api('/settings').catch(() => ({}))]);
   app.status = s;
   lastDataKey = s.data_key;

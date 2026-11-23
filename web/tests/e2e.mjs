@@ -15,7 +15,7 @@ fs.mkdirSync(out, { recursive: true });
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fq-e2e-'));
 const port = 20000 + Math.floor(Math.random() * 20000);
 const base = `http://127.0.0.1:${port}`;
-const srv = spawn(exe, ['--data', dir, '--port', String(port)], { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, FAMILY_PORT_AUTO_MAX: '300' } });
+const srv = spawn(exe, ['--data', dir, '--port', String(port), '--fast-kdf-for-tests'], { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, FAMILY_PORT_AUTO_MAX: '300' } });
 let srvLog = '';
 srv.stderr.on('data', (d) => (srvLog += d));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -48,6 +48,34 @@ const agent = async (p, body) => {
 let browser;
 try {
   for (let i = 0; i < 100 && !srvLog.includes('server on'); i++) await sleep(100);
+  browser = await chromium.launch();
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: 'light' });
+  const page = await ctx.newPage();
+  const warnings = [];
+  const errors = [];
+  page.on('console', (m) => {
+    if (m.text().includes('missing translation key')) warnings.push(m.text());
+    if (m.type() === 'error' && !/status of 423/.test(m.text())) errors.push(m.text()); // 423: the tree was locked on purpose
+  });
+  page.on('pageerror', (e) => errors.push(e.stack || e.message));
+  await check('first run: the wizard makes the tree (name, no password) and the app starts', async () => {
+    await page.goto(base + '/');
+    await page.waitForSelector('#gate-wizard');
+    assert.equal((await ui('/tree')).state, 'missing');
+    assert.equal(await page.locator('#gate-pwbox').isHidden(), true);
+    await page.fill('#gate-title', 'The Roots');
+    await page.click('#gate-protect');
+    await page.fill('#gate-pw', 'short');
+    await page.fill('#gate-pw2', 'short');
+    await page.click('#gate-create');
+    assert.match(await page.textContent('#gate-err'), /at least 8/);
+    await page.click('#gate-protect'); // changed my mind: no password
+    await page.click('#gate-create');
+    await page.waitForSelector('html[data-ready="1"]');
+    assert.equal(await page.textContent('#title'), 'The Roots');
+    assert.equal((await ui('/tree')).state, 'open');
+  });
+
   // ---- fixture: Anna + Bob (married); Cy their birth child; Dee adopted by Bob only
   const person = (given, family, sex, birth) => ui('/people', 'POST', { given_name: given, family_name: family, sex, birth_date: birth });
   const anna = await person('Anna', 'Root', 'F', '1950');
@@ -59,17 +87,7 @@ try {
   await ui('/relationships', 'POST', { type: 'parent_child', a: bob.id, b: cy.id, kind: 'birth' });
   await ui('/relationships', 'POST', { type: 'parent_child', a: bob.id, b: dee.id, kind: 'adopted' });
 
-  browser = await chromium.launch();
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: 'light' });
-  const page = await ctx.newPage();
-  const warnings = [];
-  const errors = [];
-  page.on('console', (m) => {
-    if (m.text().includes('missing translation key')) warnings.push(m.text());
-    if (m.type() === 'error') errors.push(m.text());
-  });
-  page.on('pageerror', (e) => errors.push(e.stack || e.message));
-  await page.goto(base + '/');
+  await page.reload();
   await page.waitForSelector('html[data-ready="1"]');
   await page.waitForFunction(() => window.__app.view.q && window.__app.view.q.n === 4);
   await page.waitForFunction(() => document.getElementById('strip').hidden && !window.__app.view.anim, null, { timeout: 15000 });
@@ -297,6 +315,54 @@ try {
     await page.click('#nav-quilt');
   });
 
+  await check('security: set a password, lock, wrong then right password, forgot it and use the recovery key, remove it', async () => {
+    await page.click('#settings');
+    await page.click('#set-add-pw');
+    await page.fill('#pw-new', 'first password');
+    await page.fill('#pw-new2', 'first password');
+    await page.click('#security-form .btn.primary');
+    await page.waitForSelector('#gate-recovery');
+    const rk = await page.textContent('#recovery-key');
+    assert.match(rk, /^[A-Z2-7]{4}(-[A-Z2-7]{4})+$/);
+    assert.equal(await page.locator('#gate-continue').isDisabled(), true);
+    await page.check('#gate-kept');
+    await page.click('#gate-continue');
+    await page.waitForSelector('#gate-recovery', { state: 'detached' });
+    assert.equal((await ui('/tree')).protected, true);
+    // lock from Settings: the unlock screen replaces the app and the data is refused
+    await page.click('#settings');
+    await page.click('#set-lock');
+    await page.waitForSelector('#gate-unlock-card', { timeout: 8000 }).catch(async (e) => { throw new Error(e.message + ' | page: ' + (await page.evaluate(() => (document.querySelector('.gate') ? 'gate shown' : 'no gate')))); });
+    assert.equal((await fetch(base + '/api/people?q=Anna', { headers: { 'Sec-Fetch-Site': 'same-origin' } })).status, 423);
+    assert.equal(await page.locator('.app').getAttribute('inert'), '');
+    await page.fill('#gate-pw', 'not it');
+    await page.click('#gate-unlock');
+    await page.waitForFunction(() => /not right/.test(document.getElementById('gate-err').textContent));
+    // forgot: the recovery key sets a new password
+    await page.click('#gate-forgot');
+    await page.fill('#gate-rk', rk);
+    await page.fill('#gate-pw', 'second password');
+    await page.fill('#gate-pw2', 'second password');
+    await page.click('#gate-reset');
+    await page.waitForSelector('html[data-ready="1"]');
+    await page.waitForFunction(() => window.__app.view.q && window.__app.view.q.n >= 4);
+    // lock again and unlock with the new password
+    await ui('/tree/lock', 'POST', {});
+    await page.waitForSelector('#gate-unlock-card', { timeout: 12000 }); // the status poll notices
+    await page.fill('#gate-pw', 'second password');
+    await page.click('#gate-unlock');
+    await page.waitForSelector('html[data-ready="1"]');
+    await page.waitForFunction(() => window.__app.view.q && window.__app.view.q.n >= 4);
+    // remove the password again
+    await page.click('#settings');
+    await page.click('#set-remove-pw');
+    await page.fill('#pw-current2', 'second password');
+    await page.click('#security-form .btn.primary');
+    await page.waitForFunction(() => document.getElementById('set-add-pw'));
+    assert.equal((await ui('/tree')).protected, false);
+    await page.keyboard.press('Escape');
+  });
+
   await check('keyboard: arrows pan, + and - zoom, 0 fits; toolbar targets are at least 44 px', async () => {
     await page.click('#nav-quilt');
     await page.focus('#quilt');
@@ -517,7 +583,7 @@ try {
     const p2 = await ctx.newPage();
     await p2.goto(base + '/?lang=qps');
     await p2.waitForSelector('html[data-ready="1"]');
-    const txt = await p2.textContent('.top');
+    const txt = await p2.textContent('#legend');
     assert.match(txt, /⟦/);
     const plain = await p2.$$eval('.top button, .zoomctl button, .zoomctl option', (els) => els.map((e) => e.textContent.trim()).filter((x) => x && !x.includes('⟦') && !/^[A-Za-z0-9]{0,2}$|^[−+↑↓“” ]*$/.test(x)));
     assert.deepEqual(plain, [], 'untranslated toolbar strings: ' + plain.join(', '));

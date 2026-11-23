@@ -27,6 +27,7 @@ const ASSETS: &[(&str, &[u8])] = &[
     asset!("js/review.js"),
     asset!("js/settings.js"),
     asset!("js/export.js"),
+    asset!("js/gate.js"),
 ];
 
 fn mime(path: &str) -> &'static str {
