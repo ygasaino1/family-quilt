@@ -1,8 +1,6 @@
-//! `family-app`. Phase 4 runs headless (`--data DIR`); the window, wizard and embedded UI come in
-//! Phase 5/6. `--mcp-stdio` is the bridge for agent apps that start local MCP servers.
+//! `family-app`. Headless for now (`--data DIR`); the first-run wizard and unlock screen are in the page, the window comes next. `--mcp-stdio` is the bridge for agent apps that start local MCP servers.
 
-use family_server::{bridge, serve, token, AppState};
-use family_store::{tree_state, Credentials, OpenOptions, Protection, Store, TreeState};
+use family_server::{bridge, serve, token, tree, AppState};
 use std::path::PathBuf;
 
 fn data_dir(args: &[String]) -> PathBuf {
@@ -35,20 +33,13 @@ async fn main() {
     tracing_subscriber::fmt().with_writer(std::io::stderr).init();
     std::fs::create_dir_all(&dir).expect("cannot create the data folder");
     let db = dir.join("tree.sqlite");
-    let store = match tree_state(&db) {
-        Ok(TreeState::Missing) => Store::create_tree(&db, Protection::None).expect("cannot create the tree").0,
-        Ok(TreeState::Plain) => Store::open_tree(&db, Credentials::None, &OpenOptions::default()).expect("cannot open the tree"),
-        Ok(_) => {
-            eprintln!("This tree is protected by a password; unlocking arrives with the window (Phase 5).");
-            std::process::exit(2);
-        }
-        Err(e) => {
-            eprintln!("Cannot read the tree: {e}");
-            std::process::exit(1);
-        }
-    };
     let tok = token::load_or_create(&dir).expect("cannot create the agent token");
-    let state = AppState::new(store, tok, dir.clone());
+    let state = AppState::new_closed(tok, dir.clone(), db, args.iter().any(|a| a == "--fast-kdf-for-tests"));
+    // An unprotected tree opens at once; a protected one waits for the unlock screen; a missing one for the wizard.
+    if let Err(e) = tree::open_if_plain(&state) {
+        eprintln!("Cannot read the tree: {}", e.message);
+        std::process::exit(1);
+    }
     let (port, handle) = serve(state, args.iter().position(|a| a == "--port").and_then(|i| args.get(i + 1)).and_then(|p| p.parse().ok()).unwrap_or(0)).await.expect("cannot start the server");
     token::write_endpoint(&dir, port).ok();
     eprintln!("Family tree server on http://127.0.0.1:{port} (data: {})", dir.display());

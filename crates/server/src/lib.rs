@@ -15,6 +15,7 @@ pub mod mcp;
 pub mod ops;
 pub mod quilt;
 pub mod token;
+pub mod tree;
 pub mod ui;
 pub mod web;
 
@@ -50,13 +51,46 @@ pub struct AppState {
     pub sessions: Mutex<HashMap<String, String>>,
     pub activity: Mutex<VecDeque<Activity>>,
     pub quilt: Mutex<quilt::QuiltState>,
+    /// The tree file. While `locked` the `store` is an empty placeholder (see `tree`).
+    pub db_path: PathBuf,
+    pub locked: std::sync::atomic::AtomicBool,
+    pub last_active: Mutex<std::time::Instant>,
+    pub auto_lock_minutes: std::sync::atomic::AtomicU32,
+    /// Key-derivation cost for new passwords (tests use cheap settings).
+    pub kdf: family_store::KdfParams,
+    /// Pause after a wrong password (tests set zero).
+    pub wrong_password_delay: std::time::Duration,
 }
 
 pub type Shared = Arc<AppState>;
 
 impl AppState {
+    /// An already open tree (tests, tools).
     pub fn new(store: Store, token: String, data_dir: PathBuf) -> Shared {
+        Self::build_state(store, token, data_dir.clone(), data_dir.join("tree.sqlite"), false)
+    }
+
+    /// No tree open yet: first run or locked. `tree::open_if_plain` opens an unprotected one.
+    /// `fast_for_tests`: cheap key derivation and no pause after a wrong password. Never for real data.
+    pub fn new_closed(token: String, data_dir: PathBuf, db_path: PathBuf, fast_for_tests: bool) -> Shared {
+        let placeholder = Store::open_in_memory().expect("an in-memory store always opens");
+        let mut st = Self::build_state(placeholder, token, data_dir, db_path, true);
+        if fast_for_tests {
+            let s = Arc::get_mut(&mut st).expect("not shared yet");
+            s.kdf = family_store::KdfParams::FAST_FOR_TESTS;
+            s.wrong_password_delay = std::time::Duration::ZERO;
+        }
+        st
+    }
+
+    fn build_state(store: Store, token: String, data_dir: PathBuf, db_path: PathBuf, locked: bool) -> Shared {
         Arc::new(AppState {
+            db_path,
+            locked: locked.into(),
+            last_active: Mutex::new(std::time::Instant::now()),
+            auto_lock_minutes: Default::default(),
+            kdf: family_store::KdfParams::STANDARD,
+            wrong_password_delay: std::time::Duration::from_millis(1000),
             store: Mutex::new(store),
             token,
             data_dir,
@@ -145,8 +179,13 @@ async fn agent_guard(State(st): State<Shared>, mut req: Request, next: Next) -> 
 }
 
 pub fn router(state: Shared) -> Router {
-    let agent = Router::new().nest("/v1", agent::routes()).merge(mcp::routes()).layer(middleware::from_fn_with_state(state.clone(), agent_guard));
-    let api = ui::routes().layer(middleware::from_fn(ui_guard));
+    let agent = Router::new()
+        .nest("/v1", agent::routes())
+        .merge(mcp::routes())
+        .layer(middleware::from_fn_with_state(state.clone(), tree::agent_lock_guard))
+        .layer(middleware::from_fn_with_state(state.clone(), agent_guard));
+    let data = ui::routes().layer(middleware::from_fn_with_state(state.clone(), tree::lock_guard));
+    let api = data.merge(tree::routes()).layer(middleware::from_fn(ui_guard));
     Router::new().nest("/agent", agent).nest("/api", api).fallback(web::serve_asset).layer(middleware::from_fn(host_guard)).with_state(state)
 }
 
@@ -155,9 +194,11 @@ pub async fn serve(state: Shared, port: u16) -> std::io::Result<(u16, tokio::tas
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     let port = listener.local_addr()?.port();
     state.port.store(port, std::sync::atomic::Ordering::Relaxed);
-    let app = router(state);
+    let app = router(state.clone());
+    let timer = tree::spawn_idle_timer(state);
     let handle = tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
+        timer.abort();
     });
     Ok((port, handle))
 }
