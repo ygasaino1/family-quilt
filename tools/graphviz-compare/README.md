@@ -21,3 +21,7 @@ This folder is how we check that they still give **exactly** what `dot` gives, l
 
 A newer `dot` that disagrees is the signal that the port needs review (or that a Graphviz change altered tie-breaking).
 Last verified: Graphviz 16.1.2, Greek gods file, seeds 1-800 and a 5,600-node generated genealogy, all identical.
+
+Sort-stability check (2026-11-24): in `balance_tb` the order of nodes with equal rank was reversed on purpose and the 600 seeds still
+agreed with Graphviz 16.1.2, so the stable-sort assumption does not change the result on these graphs (the system `dot` 2.43 differs
+from 16.1.2 on about 16% of them; compare only against the version in `UPSTREAM`).
