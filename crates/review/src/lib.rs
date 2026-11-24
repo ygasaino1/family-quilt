@@ -14,6 +14,7 @@ pub mod apply;
 pub mod edit;
 pub mod fields;
 pub mod guide;
+pub mod history;
 pub mod query;
 pub mod review;
 pub mod submit;

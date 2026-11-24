@@ -31,6 +31,7 @@ pub fn routes() -> Router<Shared> {
         .route("/proposals/{id}", get(proposal))
         .route("/proposals/{id}/approve", post(approve))
         .route("/proposals/{id}/reject", post(reject))
+        .route("/proposals/{id}/edit", post(edit_item))
         .route("/people", get(people).post(create_person))
         .route("/people/{id}", get(person).patch(patch_person).delete(delete_person))
         .route("/names/{id}", patch(patch_name))
@@ -76,8 +77,23 @@ async fn approve(State(st): State<Shared>, Path(id): Path<String>, body: Option<
     Ok(Json(serde_json::to_value(r).unwrap_or_default()))
 }
 
-async fn reject(State(st): State<Shared>, Path(id): Path<String>) -> Result<Json<Value>, ApiError> {
-    let r = apply::reject(&mut lock(&st), &id, HUMAN)?;
+#[derive(Deserialize, Default)]
+struct RejectReq {
+    /// `wrong` (fix it and send again), `duplicate`, `not_wanted` (never again) or `not_now`.
+    reason: Option<String>,
+    note: Option<String>,
+}
+
+async fn reject(State(st): State<Shared>, Path(id): Path<String>, body: Option<Json<RejectReq>>) -> Result<Json<Value>, ApiError> {
+    let req = body.map(|b| b.0).unwrap_or_default();
+    let code = req.reason.as_deref().filter(|c| ["wrong", "duplicate", "not_wanted", "not_now"].contains(c));
+    let text = req.note.as_deref().map(str::trim).filter(|t| !t.is_empty());
+    let note = match (code, text) {
+        (Some(c), Some(t)) => Some(format!("{c}: {t}")),
+        (Some(c), None) => Some(c.to_string()),
+        (None, t) => t.map(str::to_string),
+    };
+    let r = apply::reject_with_note(&mut lock(&st), &id, HUMAN, note.as_deref())?;
     Ok(Json(json!({"ok": true, "affected_proposals": r.affected_proposals})))
 }
 
@@ -327,4 +343,11 @@ async fn patch_name(State(st): State<Shared>, Path(id): Path<String>, Json(b): J
     let (person_id, _) = s.find_name(&CTX, &id)?;
     apply_name(&mut s, &CTX, &id, &pairs, HUMAN)?;
     Ok(Json(serde_json::to_value(s.get_person(&CTX, &person_id)?).unwrap_or_default()))
+}
+
+/// Correct a value in a pending proposal before approving it.
+async fn edit_item(State(st): State<Shared>, Path(id): Path<String>, Json(req): Json<family_review::edit::EditRequest>) -> Result<Json<Value>, ApiError> {
+    let edits = family_review::edit::edit(&mut lock(&st), &id, &req, HUMAN)?;
+    let view = review::review(&lock(&st), &id)?;
+    Ok(Json(json!({"edits": edits, "review": view})))
 }

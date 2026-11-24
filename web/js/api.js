@@ -2,7 +2,7 @@
 
 export class ApiError extends Error {
   constructor(status, body) {
-    super((body && (body.message || body.error)) || `HTTP ${status}`);
+    super((body && (body.message || (typeof body.error === 'string' ? body.error : body.error?.message))) || `HTTP ${status}`);
     this.status = status;
     this.body = body;
   }

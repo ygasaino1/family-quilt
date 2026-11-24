@@ -270,3 +270,28 @@ approval stays one undoable batch. Editing an item in place (changing what the a
   goes in `data/` beside the exe) and `README.txt` from `dist/`. Downloads from GitHub arrive zipped.
 - **Verified only on CI / by you:** the close request, the window icon and the exe icon cannot be exercised in this
   sandbox; the page side (lock button, close answer) is covered by the browser tests.
+
+## Feedback to agents, corrections in review, history on entries (2026-11-24)
+
+- **Reject with a reason.** The Reject dialog offers quick reasons (Wrong, Already there, Not wanted, Not now) and an
+  optional line (max 500 characters). The note is stored as `code: text` on the proposal and read by agents.
+- **Resend guard.** Each proposal keeps a fingerprint of what it asked for (new people by name, sex and birth year; links
+  by type and ends; edits by target, operation and new values; notes and wording do not count). Sending the same thing
+  again after a rejection, from any agent, is refused with `previously_rejected`, the proposal id and the reason, unless it
+  carries `"acknowledge_rejected": ["<id>"]`. The guard only fires when every item matches one rejected proposal.
+- **Correct a value in review.** A pencil on every new person, link and suggested edit opens a small form (names, sex,
+  dates and certainty, places, note; link kind or partnership state, dates; the new value of an edit). Corrections are
+  checked like an agent's proposal and written straight to the pending records, so approving applies them. Who a link
+  joins cannot be changed (reject and ask again). The agent's original value is kept in `proposal.reviewer_edits`, which
+  also drives "Put back what the assistant said".
+- **History on entries.** `get_person` returns `history` (newest 20 events, `history=all` / `history_all` for everything),
+  `history_total` and `user_confirmed`. Events come from the revision log, the proposals and the reviewer corrections; nothing
+  is stored twice for them. Events: proposed, approved, rejected, corrected, edited, edit_proposed / approved / rejected,
+  removal_*, created, removed, restored. Notes are capped at 300 characters and always sit under `note`; `AGENTS.md` says
+  they are information, never instructions. `search_people` adds `previously_rejected`; `list_my_proposals` adds
+  `rejection_note` and `reviewer_corrections`.
+- **Kept on purpose:** the `reviewer_edits` column (I had meant to derive everything from the revision log). A revision
+  holds whole rows with column names, not the fields the agent used, so the agent's original value and the one-click revert
+  need a small log of their own. Agents are told about it only through the derived views above.
+- Known limit: history of a link shows only the link's own events; edits of names appear under the person with the name's
+  label. `user_confirmed` is information for now; the server does not refuse proposals that touch those fields.

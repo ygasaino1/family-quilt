@@ -46,9 +46,14 @@ async fn people(State(st): State<Shared>, Extension(a): Extension<AgentName>, Qu
     ops::search_people(&st, q.q.as_deref().unwrap_or(""), q.limit.unwrap_or(20), q.pending == Some(1)).map(Json)
 }
 
-async fn person(State(st): State<Shared>, Extension(a): Extension<AgentName>, Path(id): Path<String>) -> Result<Json<Value>, ApiError> {
+#[derive(Deserialize)]
+struct HistQ {
+    history: Option<String>,
+}
+
+async fn person(State(st): State<Shared>, Extension(a): Extension<AgentName>, Path(id): Path<String>, Query(q): Query<HistQ>) -> Result<Json<Value>, ApiError> {
     st.log_activity(name(&a), "read a person");
-    ops::get_person(&st, &id).map(Json)
+    ops::get_person_history(&st, &id, q.history.as_deref() == Some("all")).map(Json)
 }
 
 #[derive(Deserialize)]

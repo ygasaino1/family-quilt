@@ -1,7 +1,7 @@
 // The review panel, docked beside the quilt: what an AI assistant proposed, in your words and theirs.
 import { t, fmtAgo } from './i18n.js';
 import { api } from './api.js';
-import { h, toast, confirmBox, sexWord, fill, icon } from './dom.js';
+import { h, toast, sexWord, sexLetter, fill, icon } from './dom.js';
 
 let app;
 let selected = null;
@@ -49,6 +49,57 @@ export async function show(id) {
   await renderDetail(detail, selected);
 }
 
+// ---- correcting a value before approving ----
+const QUALS = ['exact', 'about', 'before', 'after'];
+const ENUMS = {
+  sex: { values: ['M', 'F', 'X', 'U'], label: (v) => t('sex.' + sexWord(v)) },
+  birth_qualifier: { values: QUALS, label: (v) => t('q.' + v) },
+  death_qualifier: { values: QUALS, label: (v) => t('q.' + v) },
+  kind: { values: ['birth', 'adopted', 'foster', 'step', 'guardian', 'sealing', 'unknown'], label: (v) => t('kind.' + v) },
+  subtype: { values: ['married', 'unmarried', 'divorced', 'ended', 'unknown'], label: (v) => t('state.' + v + '.long') },
+  is_living: { values: ['true', 'false'], label: (v) => (v === 'true' ? t('common.yes') : t('common.no')) },
+};
+
+/** An input for one field: a list for the fixed choices, a text box otherwise. `get()` gives the text typed or chosen. */
+function fieldInput(field, value, id) {
+  const e = ENUMS[field];
+  const cur = value === null || value === undefined ? '' : String(value);
+  if (e) {
+    const sel = h('select', { id, 'aria-label': t('field.' + field) }, ...e.values.map((v) => h('option', { value: v, selected: v === cur }, e.label(v))));
+    if (!e.values.includes(cur)) sel.prepend(h('option', { value: '', selected: true }, ''));
+    return { el: sel, get: () => sel.value };
+  }
+  const inp = h('input', { type: 'text', id, value: cur, autocomplete: 'off', 'aria-label': t('field.' + field) });
+  return { el: inp, get: () => inp.value.trim() };
+}
+
+/** Send corrections for several records; fields are `{kind, target_id, field, value}`. Date and certainty go together. */
+async function sendEdits(proposalId, specs) {
+  const groups = new Map();
+  for (const s of specs) {
+    const k = s.kind + '|' + s.target_id;
+    if (!groups.has(k)) groups.set(k, { kind: s.kind, target_id: s.target_id, fields: {} });
+    groups.get(k).fields[s.field] = s.value;
+  }
+  for (const g of groups.values()) {
+    for (const [d, q] of [['birth_date', 'birth_qualifier'], ['death_date', 'death_qualifier']]) {
+      if (d in g.fields || q in g.fields) {
+        const date = d in g.fields ? g.fields[d] : specs.find((s) => s.field === d && s.target_id === g.target_id)?.was;
+        if (!date) { g.fields[d] = null; g.fields[q] = null; } else if (!g.fields[q]) g.fields[q] = 'exact';
+        if (!(d in g.fields)) g.fields[d] = date;
+      }
+    }
+    for (const f of Object.keys(g.fields)) if (g.fields[f] === '') g.fields[f] = null;
+    if ('is_living' in g.fields && g.fields.is_living !== null) g.fields.is_living = g.fields.is_living === 'true';
+    await api(`/proposals/${proposalId}/edit`, { method: 'POST', body: { kind: g.kind, target_id: g.target_id, fields: g.fields } });
+  }
+}
+
+let keep = { id: null, set: new Set() };
+
+/** The server's field-level problems when there are some, else its message. */
+const problems = (e) => (e.body?.error?.fields?.length ? e.body.error.fields.map((f) => `${t('field.' + String(f.path).split('.').pop()) || f.path}: ${f.message}`).join('; ') : e.message);
+
 async function renderDetail(box, id) {
   let v;
   try {
@@ -61,7 +112,8 @@ async function renderDetail(box, id) {
   const checks = []; // {change, field, box, conflict, over}
 
   // New people and links can each be left out of the approval (the ✕ on the row); a left-out person takes their links along.
-  const leftOut = new Set();
+  if (keep.id !== id) keep = { id, set: new Set() };
+  const leftOut = keep.set;
   const rows = []; // {el, kind: 'person'|'link', id, a, b}
   const syncOut = () => {
     for (const r of rows) {
@@ -86,19 +138,74 @@ async function renderDetail(box, id) {
     return r.btn;
   };
   const items = [];
+  const edits = v.edits || [];
+  /** The pencil, the "edited" mark and the form that opens under a row. `fields`: [{kind, target_id, field, value}]. */
+  const editor = (row, fields, targets) => {
+    const mine = edits.filter((e) => targets.includes(e.target_id));
+    const inputs = fields.map((f) => ({ ...f, input: fieldInput(f.field, f.value, `e-${f.target_id}-${f.field}`) }));
+    const err = h('p', { class: 'conflict', role: 'alert', hidden: true });
+    const form = h('div', { class: 'edit-form', hidden: true },
+      h('div', { class: 'props' }, ...inputs.flatMap((f) => [h('label', { for: f.input.el.id }, t('field.' + f.field)), f.input.el])), err,
+      h('div', { class: 'tools' },
+        h('button', { class: 'btn tiny primary', onclick: async () => {
+          const changed = inputs.filter((f) => String(f.input.get()) !== String(f.value ?? '')).map((f) => ({ kind: f.kind, target_id: f.target_id, field: f.field, value: f.input.get(), was: f.value }));
+          if (!changed.length) { form.hidden = true; return; }
+          try {
+            await sendEdits(id, changed);
+            await renderDetail(box, id);
+          } catch (e) {
+            err.textContent = problems(e);
+            err.hidden = false;
+          }
+        } }, t('review.edit_save')),
+        mine.length ? h('button', { class: 'btn tiny', onclick: async () => {
+          try {
+            await sendEdits(id, mine.map((e) => ({ kind: e.kind, target_id: e.target_id, field: e.field, value: e.original, was: e.current })));
+            await renderDetail(box, id);
+          } catch (e2) {
+            err.textContent = problems(e2);
+            err.hidden = false;
+          }
+        } }, t('review.edit_undo')) : null));
+    const pencil = h('button', { class: 'btn tiny', 'aria-expanded': 'false', title: t('review.edit'), 'aria-label': t('review.edit'), onclick: () => {
+      form.hidden = !form.hidden;
+      pencil.setAttribute('aria-expanded', String(!form.hidden));
+    } }, icon('edit', 14));
+    return { pencil, form, mark: mine.length ? h('span', { class: 'chip', title: mine.map((e) => `${t('field.' + e.field)}: ${e.original ?? ''} → ${e.current ?? ''}`).join('\n') }, t('review.edited')) : null };
+  };
   for (const q of v.new_people) {
     const r = { kind: 'person', id: q.id };
     const btn = leaveOutBtn(r);
-    r.el = h('div', { class: 'item-row' }, h('span', { class: 'waiting' }, t('review.waiting')), h('span', { class: 'nm' }, q.display_name, born(q) ? ` · ${born(q)} –` : ''),
-      h('button', { class: 'link', title: t('review.show_in_tree'), 'aria-label': t('review.show_in_tree'), onclick: () => app.view.q && app.openPerson(q.id) }, icon('tree', 16)), btn);
-    items.push(r.el);
+    const nm = (q.names || []).find((n) => n.is_primary) || (q.names || [])[0];
+    const fields = [];
+    if (nm) {
+      if (nm.given || nm.family) fields.push({ kind: 'person_name', target_id: nm.id, field: 'given', value: nm.given }, { kind: 'person_name', target_id: nm.id, field: 'family', value: nm.family });
+      else fields.push({ kind: 'person_name', target_id: nm.id, field: 'full_name', value: nm.full_name });
+    }
+    const P = (field, value) => fields.push({ kind: 'person', target_id: q.id, field, value });
+    P('sex', sexLetter(q.sex));
+    P('birth_date', q.birth?.date ?? '');
+    P('birth_qualifier', q.birth?.qualifier ?? '');
+    P('birth_place', q.birth_place?.name ?? '');
+    P('death_date', q.death?.date ?? '');
+    P('death_qualifier', q.death?.qualifier ?? '');
+    P('death_place', q.death_place?.name ?? '');
+    P('note', q.note ?? '');
+    const ed = editor(r, fields, [q.id, ...(q.names || []).map((n) => n.id)]);
+    r.el = h('div', { class: 'item-row' }, h('span', { class: 'waiting' }, t('review.waiting')), h('span', { class: 'nm' }, q.display_name, born(q) ? ` · ${born(q)} –` : ''), ed.mark,
+      h('button', { class: 'link', title: t('review.show_in_tree'), 'aria-label': t('review.show_in_tree'), onclick: () => app.view.q && app.openPerson(q.id) }, icon('tree', 16)), ed.pencil, btn);
+    items.push(h('div', { class: 'item' }, r.el, ed.form));
   }
   for (const l of v.new_relationships) {
     const r = { kind: 'link', id: l.id, a: l.person_a, b: l.person_b };
     const btn = leaveOutBtn(r);
+    const rel = l.rel || l;
+    const fields = rel.rel_type === 'parent_child' ? [{ kind: 'relationship', target_id: rel.id, field: 'kind', value: rel.kind || 'unknown' }] : [{ kind: 'relationship', target_id: rel.id, field: 'subtype', value: rel.subtype || 'unknown' }];
+    fields.push({ kind: 'relationship', target_id: rel.id, field: 'start_date', value: rel.start_date ?? '' }, { kind: 'relationship', target_id: rel.id, field: 'end_date', value: rel.end_date ?? '' });
+    const ed = editor(r, fields, [rel.id]);
     r.el = h('div', { class: 'item-row' }, h('span', { class: 'waiting' }, t('review.waiting')), h('span', { class: 'nm' },
-      l.rel_type === 'parent_child' ? t('review.link_parent', { a: l.a_name, b: l.b_name, kind: t('kind.' + (l.kind || 'unknown')) }) : t('review.link_partner', { a: l.a_name, b: l.b_name, state: t('state.' + (l.subtype || 'unknown') + '.long') })), btn);
-    items.push(r.el);
+      l.rel_type === 'parent_child' ? t('review.link_parent', { a: l.a_name, b: l.b_name, kind: t('kind.' + (l.kind || 'unknown')) }) : t('review.link_partner', { a: l.a_name, b: l.b_name, state: t('state.' + (l.subtype || 'unknown') + '.long') })), ed.mark, ed.pencil, btn);
+    items.push(h('div', { class: 'item' }, r.el, ed.form));
   }
 
   const changeBlocks = [];
@@ -113,9 +220,30 @@ async function renderDetail(box, id) {
       const accept = h('input', { type: 'checkbox', id: `f-${c.id}-${f.field}`, checked: !f.conflict, 'aria-label': t('review.accept') });
       const over = f.conflict ? h('input', { type: 'checkbox', id: `o-${c.id}-${f.field}` }) : null;
       checks.push({ change: c, field: f.field, box: accept, over });
+      // The new value can be corrected before accepting it; what the assistant proposed stays on record.
+      const corrected = edits.find((e) => e.kind === 'change' && e.target_id === c.id && e.field === f.field);
+      const toBox = h('span', { class: 'to' }, val(f.to), corrected ? h('span', { class: 'chip', title: `${t('review.assistant_said')}: ${corrected.original ?? ''}` }, t('review.edited')) : null);
+      const pencil = h('button', { class: 'btn tiny', title: t('review.edit'), 'aria-label': t('review.edit'), onclick: () => {
+        const input = fieldInput(f.field, f.to, `ce-${c.id}-${f.field}`);
+        const save = async (value) => {
+          try {
+            await sendEdits(id, [{ kind: 'change', target_id: c.id, field: f.field, value, was: f.to }]);
+            await renderDetail(box, id);
+          } catch (e) {
+            toast(problems(e), 'error');
+          }
+        };
+        input.el.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter') save(input.get());
+          if (ev.key === 'Escape') { ev.stopPropagation(); renderDetail(box, id); }
+        });
+        fill(toBox, input.el, h('button', { class: 'btn tiny primary', onclick: () => save(input.get()) }, t('review.edit_save')),
+          corrected ? h('button', { class: 'btn tiny', onclick: () => save(corrected.original ?? '') }, t('review.edit_undo')) : null);
+        input.el.focus();
+      } }, icon('edit', 14));
       changeBlocks.push(h('div', { class: 'sugg' },
         h('span', { class: 'what' }, c.target_label, ' · ', t('field.' + f.field)),
-        h('span', { class: 'from' }, val(f.from)), h('span', { class: 'arrow' }, '→'), h('span', { class: 'to' }, val(f.to)),
+        h('span', { class: 'from' }, val(f.from)), h('span', { class: 'arrow' }, '→'), toBox, pencil,
         h('label', {}, accept, ' ', t('review.accept')),
         f.conflict ? h('div', { class: 'conflict' }, t('review.conflict', { current: String(f.current ?? '') }), h('label', {}, over, ' ', t('review.overwrite'))) : null));
     }
@@ -174,13 +302,40 @@ async function doApprove(id, checks, leftOut, v) {
 }
 
 async function doReject(id) {
-  if (!(await confirmBox(t('review.reject'), t('review.reject_body'), { danger: true, ok: t('review.reject') }))) return;
+  const why = await rejectDialog();
+  if (!why) return;
   try {
-    const r = await api(`/proposals/${id}/reject`, { method: 'POST' });
+    const r = await api(`/proposals/${id}/reject`, { method: 'POST', body: why });
     toast(t('review.rejected'));
     if (r.affected_proposals?.length) toast(t('review.affected', { n: r.affected_proposals.length }), 'error');
     await app.refreshAll();
   } catch (e) {
     toast(e.message, 'error');
   }
+}
+
+/** Ask why, so the assistant that sent it can read the reason and not send it again. Resolves to {reason, note} or null. */
+function rejectDialog() {
+  return new Promise((resolve) => {
+    let reason = null;
+    const chips = ['wrong', 'duplicate', 'not_wanted', 'not_now'].map((c) =>
+      h('button', { class: 'btn tiny', type: 'button', 'aria-pressed': 'false', 'data-reason': c, title: t('reject.hint_' + c), onclick: (e) => {
+        reason = reason === c ? null : c;
+        for (const b of chips) b.setAttribute('aria-pressed', String(b.dataset.reason === reason));
+        e.currentTarget.blur();
+      } }, t('reject.' + c)));
+    const note = h('textarea', { id: 'reject-note', rows: 2, maxlength: 500, placeholder: t('reject.note_placeholder'), 'aria-label': t('reject.note_placeholder') });
+    const d = h('dialog', { class: 'dlg', id: 'dlg-reject' });
+    const done = (v) => {
+      d.close();
+      d.remove();
+      resolve(v);
+    };
+    d.append(h('h2', {}, t('review.reject')), h('p', {}, t('review.reject_body')), h('p', { class: 'muted small' }, t('reject.why')), h('div', { class: 'tools' }, ...chips), note,
+      h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => done(null) }, t('common.cancel')),
+        h('button', { class: 'btn danger', onclick: () => done({ reason, note: note.value.trim() || null }) }, t('review.reject'))));
+    d.addEventListener('cancel', () => done(null));
+    document.body.append(d);
+    d.showModal();
+  });
 }

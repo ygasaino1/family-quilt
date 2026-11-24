@@ -54,9 +54,13 @@ try {
   const warnings = [];
   const errors = [];
   let allow400 = false; // set while a step sends a bad request on purpose
+  const ring = [];
+  page.on('console', (m) => ring.push(m.type() + ': ' + m.text().slice(0, 160)) && ring.length > 12 && ring.shift());
+  page.on('pageerror', (e) => ring.push('PAGEERROR ' + String(e.message).slice(0, 200)) && ring.length > 12 && ring.shift());
+  page.on('framenavigated', (f) => f === page.mainFrame() && ring.push('NAV ' + f.url()) && ring.length > 12 && ring.shift());
   page.on('console', (m) => {
     if (m.text().includes('missing translation key')) warnings.push(m.text());
-    if (m.type() === 'error' && !/status of 423/.test(m.text()) && !(allow400 && /status of 400/.test(m.text()))) errors.push(m.text()); // 423: the tree was locked on purpose
+    if (m.type() === 'error' && !/status of 423/.test(m.text()) && !(allow400 && /status of (400|422)/.test(m.text()))) errors.push(m.text()); // 423: the tree was locked on purpose
   });
   page.on('pageerror', (e) => errors.push(e.stack || e.message));
   await check('first run: the wizard makes the tree (name, no password) and the app starts', async () => {
@@ -302,6 +306,51 @@ try {
     assert.equal(found.people.length, 0);
   });
 
+  await check('review: correct a value, reject with a reason; the assistant can read both', async () => {
+    const r = await agent('/proposals', { summary: 'Add Tala', people: [{ ref: 't', given_name: 'Tala', family_name: 'Rahimi', sex: 'F', birth_date: '1980' }] });
+    await page.click('#nav-review');
+    await page.waitForSelector('.item .btn[aria-label="Correct a value"]', { timeout: 12000 });
+    await page.waitForTimeout(1500); // the panel may still re-draw itself once after the proposal arrives
+    await page.click('.item .btn[aria-label="Correct a value"]');
+    await page.waitForSelector('.edit-form:not([hidden])', { timeout: 5000 });
+    await page.screenshot({ path: path.join(out, 'light-review-edit.png') });
+    allow400 = true;
+    await page.fill('.edit-form input[id$="-birth_date"]', '19x1', { timeout: 4000 }).catch(async (e) => { throw new Error(e.message.split('\n')[0] + ' | ' + (await page.innerHTML('.edit-form')).slice(0, 1200)); });
+    await page.click('.edit-form .btn.primary');
+    await page.waitForFunction(() => /birth date/i.test(document.querySelector('.edit-form .conflict:not([hidden])')?.textContent || ''));
+    allow400 = false;
+    await page.fill('.edit-form input[id$="-birth_date"]', '1981').catch(async (e) => { throw new Error(e.message.split('\n')[0] + ' | ' + (await page.innerHTML('#review-root')).slice(0, 1500)); });
+    await page.click('.edit-form .btn.primary');
+    await page.waitForSelector('.item .chip', { timeout: 8000 });
+    await page.click('#review-approve');
+    await page.waitForFunction(() => document.getElementById('review-badge').hidden, null, { timeout: 8000 });
+    const tala = (await ui('/people?q=Tala')).people[0];
+    assert.match(JSON.stringify((await ui('/people/' + tala.id)).person.birth), /1981/);
+    const seen = await agent('/people/' + tala.id);
+    const corrected = seen.history.find((e) => e.event === 'corrected');
+    assert.deepEqual(corrected.changes[0], { field: 'birth_date', from: '1980', to: '1981' });
+    assert.equal(seen.user_confirmed.birth_date.value, '1981');
+    assert.ok(seen.history.some((e) => e.event === 'approved'));
+
+    // Rejecting with a reason: the next agent that searches or resends is told.
+    const bad = { summary: 'Add Bogus', people: [{ ref: 'b', given_name: 'Bogus', family_name: 'Person', sex: 'M', birth_date: '1900' }] };
+    await agent('/proposals', bad);
+    await page.click('#nav-review');
+    await page.waitForSelector('#review-reject', { timeout: 12000 });
+    await page.click('#review-reject');
+    await page.click('#dlg-reject [data-reason="not_wanted"]');
+    await page.screenshot({ path: path.join(out, 'light-reject.png') });
+    await page.fill('#reject-note', 'made up');
+    await page.click('#dlg-reject .btn.danger');
+    await page.waitForFunction(() => document.getElementById('review-badge').hidden, null, { timeout: 8000 });
+    const found = await agent('/people?q=Bogus');
+    assert.equal(found.people.length, 0);
+    assert.equal(found.previously_rejected[0].note, 'not_wanted: made up');
+    await assert.rejects(() => agent('/proposals', bad), /previously_rejected/);
+    const mine = await agent('/proposals');
+    assert.ok(JSON.stringify(mine).includes('not_wanted: made up'));
+  });
+
   await check('review: a new person can be left out of the approval, and their link goes with them', async () => {
     await agent('/proposals', {
       summary: 'Add Ivy and Jon',
@@ -326,6 +375,7 @@ try {
 
   await check('security: set a password, lock, wrong then right password, forgot it and use the recovery key, remove it', async () => {
     assert.equal(await page.locator('#nav-lock').isHidden(), true); // nothing to lock without a password
+    await page.waitForTimeout(1500); // let the screen finish re-drawing after the earlier approvals
     await page.click('#settings');
     await page.click('#set-add-pw');
     await page.fill('#pw-new', 'first password');
@@ -342,7 +392,10 @@ try {
     // lock from the rail button: the unlock screen replaces the app and the data is refused
     assert.equal(await page.locator('#nav-lock').isVisible(), true);
     await page.click('#nav-lock');
-    await page.waitForSelector('#gate-unlock-card', { timeout: 8000 }).catch(async (e) => { throw new Error(e.message + ' | page: ' + (await page.evaluate(() => (document.querySelector('.gate') ? 'gate shown' : 'no gate')))); });
+    await page.waitForSelector('#gate-unlock-card', { timeout: 8000 }).catch(async (e) => {
+      const info = await page.evaluate(() => `${document.querySelector('.gate') ? 'gate shown' : 'no gate'} dialogs=${document.querySelectorAll('dialog[open]').length} lockhidden=${document.getElementById('nav-lock').hidden}`);
+      throw new Error(`${e.message} | page: ${info} tree=${JSON.stringify(await ui('/tree').catch((x) => x.message)).slice(0, 120)} ring=${ring.join(' // ')}`);
+    });
     assert.equal((await fetch(base + '/api/people?q=Anna', { headers: { 'Sec-Fetch-Site': 'same-origin' } })).status, 423);
     assert.equal(await page.locator('.app').getAttribute('inert'), '');
     await page.fill('#gate-pw', 'not it');

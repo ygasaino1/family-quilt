@@ -77,6 +77,10 @@ body { background: var(--bg); color: var(--fg); font-family: Inter, system-ui, "
 .side .btn.small, .side .sel { min-block-size: 22px; min-inline-size: 22px; padding: 0 7px; font-size: .75rem; border-radius: 4px; }
 .side .sel { border: 1px solid var(--line); background: var(--bg); color: var(--fg); font-family: inherit; inline-size: 6.2rem; }
 .side .btn.tiny { min-block-size: 22px; min-inline-size: 22px; inline-size: 22px; border-radius: 4px; padding: 0; line-height: 1; }
+/* Buttons with words in them (the review form, the reject dialog) size to their text. */
+.side .edit-form .btn.tiny, .side .sugg .btn.tiny, #dlg-reject .btn.tiny { inline-size: auto; min-block-size: 28px; padding: 0 10px; white-space: nowrap; line-height: 1.2; }
+.side .item-row > .btn.tiny, .side .sugg > .btn.tiny { min-block-size: 28px; min-inline-size: 28px; inline-size: 28px; }
+#dlg-reject .tools { gap: 6px; }
 .btn.danger-ghost { color: var(--danger); border-color: transparent; background: none; }
 .btn.danger-ghost:hover { border-color: var(--danger); }
 .side .warn { margin: 6px 10px 0; }
@@ -135,6 +139,7 @@ body.privacy #side:hover, body.privacy #side:focus-within { filter: none; }
 .btn.plain:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); border-color: transparent; }
 .btn.tiny { min-block-size: 32px; min-inline-size: 32px; inline-size: 32px; border-radius: 6px; font-size: .85rem; }
 .btn.tiny:not([aria-pressed="true"]) { border-color: transparent; background: none; }
+.btn.tiny.primary:not([aria-pressed="true"]) { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
 .searchbox { display: flex; align-items: center; gap: 4px; min-block-size: 44px; padding-inline: 12px 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); inline-size: min(34rem, 46vw); }
 .searchbox:focus-within { border-color: var(--accent); }
 .searchbox input { flex: 1 1 auto; min-inline-size: 4rem; border: 0; background: none; color: var(--fg); font: inherit; min-block-size: 44px; outline: none; }
@@ -160,6 +165,19 @@ body.privacy #side:hover, body.privacy #side:focus-within { filter: none; }
 .told { background: var(--bg); border-radius: 10px; padding: 10px 12px; margin-block-end: 12px; }
 .told .eyebrow { margin-block-end: 4px; }
 .items { display: grid; }
+.item { border-block-end: 1px solid var(--line); }
+.item:last-child { border-block-end: 0; }
+.item > .item-row { border-block-end: 0; }
+.edit-form { background: var(--bg); border-radius: 8px; padding: 8px 10px; margin-block-end: 8px; }
+.edit-form .props { grid-template-columns: 9rem 1fr; align-items: center; gap: 4px 8px; }
+.edit-form label { color: var(--muted); font-size: .82rem; }
+.edit-form input, .edit-form select, .sugg .to input, .sugg .to select { font: inherit; font-size: .88rem; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: inherit; min-width: 0; width: 100%; }
+.sugg .to input, .sugg .to select { width: auto; }
+.sugg .to { display: inline-flex; align-items: center; gap: 6px; }
+.chip { font-size: .66rem; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; background: color-mix(in srgb, var(--focus) 18%, transparent); color: var(--focus); padding: 1px 6px; border-radius: 6px; margin-inline-start: 6px; }
+#dlg-reject .tools { margin-block: 4px 8px; }
+#dlg-reject .btn[aria-pressed="true"] { background: var(--focus); color: var(--panel); border-color: var(--focus); }
+#reject-note { width: 100%; box-sizing: border-box; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: inherit; resize: vertical; }
 .item-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-block-end: 1px solid var(--line); }
 .item-row:last-child { border-block-end: 0; }
 .waiting { font-size: .68rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; background: color-mix(in srgb, var(--pending) 22%, transparent); color: var(--pending); padding: 2px 8px; border-radius: 6px; }

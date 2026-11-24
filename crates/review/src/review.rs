@@ -60,6 +60,8 @@ pub struct ReviewView {
     pub new_relationships: Vec<LinkView>,
     pub changes: Vec<ChangeView>,
     pub warnings: Vec<Warning>,
+    /// What the reviewer corrected so far: `[{kind, target_id, field, original, current, at}]`.
+    pub edits: Vec<Value>,
 }
 
 fn name_of(store: &Store, id: &str) -> String {
@@ -130,7 +132,8 @@ pub fn review(store: &Store, proposal_id: &str) -> Result<ReviewView> {
     let changes = store.changes_of(&CTX, proposal_id)?.into_iter().map(|c| change_view(store, c)).collect();
     let warnings = proposal_warnings(store, proposal_id)?;
     let depends_on = dependencies(store, proposal_id)?;
-    Ok(ReviewView { proposal, depends_on, new_people, new_relationships, changes, warnings })
+    let edits = store.reviewer_edits(proposal_id)?;
+    Ok(ReviewView { proposal, depends_on, new_people, new_relationships, changes, warnings, edits })
 }
 
 // ───────────────────────────── warnings ─────────────────────────────

@@ -200,6 +200,25 @@ impl Store {
         rows.into_iter().map(build_change).collect()
     }
 
+    /// Every proposed edit of one record, whatever became of it, with its proposal (oldest first).
+    pub fn changes_for_target(&self, _ctx: &AccessContext, target_type: &str, target_id: &str) -> Result<Vec<(ChangeRow, ProposalRow)>> {
+        let mut stmt = self.conn.prepare("SELECT c.id FROM change c JOIN proposal p ON p.id = c.proposal_id WHERE c.target_type = ?1 AND c.target_id = ?2 ORDER BY p.created_at, c.id")?;
+        let ids = stmt.query_map([target_type, target_id], |r| r.get::<_, String>(0))?.collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut out = vec![];
+        for id in ids {
+            let row = self.conn.query_row(&format!("SELECT {CHANGE_COLS} FROM change WHERE id = ?1"), [&id], change_from)?;
+            let c = build_change(row)?;
+            let p = self.get_proposal(&AccessContext::Everything, &c.proposal_id)?;
+            out.push((c, p));
+        }
+        Ok(out)
+    }
+
+    /// Name of a place by id (for showing a changed birth or death place).
+    pub fn place_name(&self, id: &str) -> Option<String> {
+        self.conn.query_row("SELECT name FROM place WHERE id = ?1", [id], |r| r.get(0)).ok()
+    }
+
     pub fn set_change_status(&mut self, _ctx: &AccessContext, id: &str, status: &str) -> Result<()> {
         if !["pending", "accepted", "rejected", "applied", "conflicting"].contains(&status) {
             return Err(StoreError::invalid("status", "unknown change status"));
