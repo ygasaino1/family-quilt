@@ -218,7 +218,7 @@ fn mcp(p: u16, body: Value, extra: &[(&str, &str)]) -> (u16, String, Value) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn mcp_has_exactly_six_tools_and_no_way_to_approve_edit_or_delete() {
+async fn mcp_has_exactly_seven_tools_and_no_way_to_approve_edit_or_delete() {
     let s = start().await;
     let p = s.port;
     let (st, head, init) = mcp(
@@ -235,7 +235,7 @@ async fn mcp_has_exactly_six_tools_and_no_way_to_approve_edit_or_delete() {
     let (_, _, list) = mcp(p, json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}), &[("Mcp-Session-Id", &sid)]);
     let mut names: Vec<String> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
     names.sort();
-    assert_eq!(names, ["create_proposal", "find_relationship", "get_graph", "get_person", "list_my_proposals", "search_people"]);
+    assert_eq!(names, ["create_proposal", "find_relationship", "get_graph", "get_person", "list_my_proposals", "search_people", "withdraw_proposal"]);
     for n in &names {
         for banned in ["approve", "reject", "edit", "delete", "update", "remove", "merge", "undo"] {
             assert!(!n.contains(banned), "{n}");
@@ -329,7 +329,7 @@ async fn stdio_bridge_forwards_and_explains_when_the_app_is_closed() {
     .unwrap_or_else(|_| unreachable!());
     assert_eq!(r_closed["result"]["isError"], true);
     assert!(r_closed["result"]["content"][0]["text"].as_str().unwrap().contains("Open the Family Tree app first"));
-    assert_eq!(r_list["result"]["tools"].as_array().unwrap().len(), 6);
+    assert_eq!(r_list["result"]["tools"].as_array().unwrap().len(), 7);
     assert!(r_note.is_none());
     // Without the endpoint file the open case is still "closed"; write it and retry.
     token::write_endpoint(&dir, s.port).unwrap();
@@ -358,7 +358,7 @@ async fn settings_snippets_and_backup() {
     assert!(v["claude_desktop_config"].as_str().unwrap().contains("--mcp-stdio"));
     assert!(v["claude_code_http"].as_str().unwrap().contains("--transport http"));
     let (_, t) = ui(p, "POST", "/api/settings/agent/test", None);
-    assert_eq!(t["tools"].as_array().unwrap().len(), 6);
+    assert_eq!(t["tools"].as_array().unwrap().len(), 7);
     let (st, head, body) = raw(p, &req("GET", "/api/backup", &[("Host", &format!("127.0.0.1:{p}")), ("Sec-Fetch-Site", "same-origin")], None));
     assert_eq!(st, 200);
     assert!(head.contains("attachment"));

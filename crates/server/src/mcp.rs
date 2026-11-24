@@ -1,6 +1,6 @@
 //! MCP over Streamable HTTP at `/agent/mcp` (spec section 18).
 //!
-//! A thin layer over [`crate::ops`]: the six tools below are the **whole** surface. There is no
+//! A thin layer over [`crate::ops`]: the tools below are the **whole** surface (the only write is to propose, or to take back your own pending proposal). There is no
 //! approve, reject, edit or delete tool, and no code path from here to those actions.
 //!
 //! Protocol: JSON-RPC 2.0, one message per POST, JSON responses (no SSE needed, no server push).
