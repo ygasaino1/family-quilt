@@ -98,6 +98,11 @@ fn events_for(store: &Store, target_type: &str, id: &str, events: &mut Vec<Event
         push(events, &p.created_at, with(v));
         match p.status.as_str() {
             "approved" => push(events, p.decided_at.as_deref().unwrap_or(""), with(json!({"who": {"type": "user"}, "event": "approved", "proposal_id": pid, "at": p.decided_at}))),
+            "rejected" if p.withdrawn => push(
+                events,
+                p.decided_at.as_deref().unwrap_or(""),
+                with(json!({"who": who(&p.created_by), "event": "withdrawn", "proposal_id": pid, "note": note_of(p.decision_note.as_deref()), "at": p.decided_at})),
+            ),
             "rejected" => push(
                 events,
                 p.decided_at.as_deref().unwrap_or(""),
@@ -153,7 +158,9 @@ fn events_for(store: &Store, target_type: &str, id: &str, events: &mut Vec<Event
         let event = match (p.status.as_str(), c.op.as_str()) {
             ("pending", "remove") => "removal_proposed",
             ("pending", _) => "edit_proposed",
+            ("rejected", "remove") if p.withdrawn => "removal_withdrawn",
             ("rejected", "remove") => "removal_rejected",
+            ("rejected", _) if p.withdrawn => "edit_withdrawn",
             ("rejected", _) => "edit_rejected",
             ("approved", "remove") => "removal_approved",
             _ => "edit_approved",

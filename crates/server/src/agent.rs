@@ -5,7 +5,7 @@ use crate::{ops, AgentName, ApiError, Shared};
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::Value;
@@ -18,6 +18,7 @@ pub fn routes() -> Router<Shared> {
         .route("/relationship", get(relationship))
         .route("/graph", get(graph))
         .route("/proposals", get(list).post(create))
+        .route("/proposals/{id}/withdraw", post(withdraw))
         .layer(axum::extract::DefaultBodyLimit::max(1_000_000))
 }
 
@@ -86,6 +87,17 @@ async fn graph(State(st): State<Shared>, Extension(a): Extension<AgentName>, Que
 async fn create(State(st): State<Shared>, Extension(a): Extension<AgentName>, Json(body): Json<Value>) -> Result<(axum::http::StatusCode, Json<Value>), ApiError> {
     st.log_activity(name(&a), "sent a proposal");
     ops::create_proposal(&st, name(&a), &body).map(|v| (axum::http::StatusCode::CREATED, Json(v)))
+}
+
+#[derive(Deserialize, Default)]
+struct WithdrawReq {
+    reason: Option<String>,
+}
+
+async fn withdraw(State(st): State<Shared>, Extension(a): Extension<AgentName>, Path(id): Path<String>, body: Option<Json<WithdrawReq>>) -> Result<Json<Value>, ApiError> {
+    st.log_activity(name(&a), "withdrew a proposal");
+    let reason = body.and_then(|b| b.0.reason);
+    ops::withdraw_proposal(&st, name(&a), &id, reason.as_deref()).map(Json)
 }
 
 async fn list(State(st): State<Shared>, Extension(a): Extension<AgentName>) -> Result<Json<Value>, ApiError> {

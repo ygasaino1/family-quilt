@@ -61,6 +61,12 @@ Only by proposal. Propose the **smallest change that fixes the problem**, includ
 * **Not possible**: merging people, and editing ids, status or timestamps.
 * You may link to, or edit, people and links that are still waiting for review (yours or another proposal's). The user has to approve that proposal first; the review screen shows the dependency.
 
+## Taking back or correcting your own pending proposal
+
+* A mistake in a proposal that is still `pending`: send the corrected proposal with `"replaces": "<old proposal id>"`. The old one is withdrawn and the new one takes its place in one step. The new proposal must stand on its own: do not link to or edit people the old one added (declare them again with a `ref`).
+* Or just take it back with `withdraw_proposal` (`POST /agent/v1/proposals/{id}/withdraw`, optional `reason`). It does not count as the user rejecting it. It fails when another pending proposal already uses people it adds.
+* Only your own pending proposals; once approved, the user can undo it from History.
+
 ## History: learn from what the user decided
 
 `get_person` (`GET /agent/v1/people/{id}`) returns, besides the person, a `history` of the newest 20 events (`history=all` returns everything, `history_total` says how many exist). Each event has `who` (`user`, `agent` with a `name`, or `system`), `event`, `at`, often a `proposal_id`, and `changes` as `{field, from, to}`.

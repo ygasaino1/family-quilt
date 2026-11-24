@@ -21,6 +21,8 @@ pub struct ProposalRow {
     pub decided_at: Option<String>,
     /// The reviewer's reason for rejecting, shown to the agent.
     pub decision_note: Option<String>,
+    /// Taken back by the agent that sent it (the user did not reject it).
+    pub withdrawn: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -45,10 +47,20 @@ pub struct ProposalRecords {
 }
 
 fn proposal_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<ProposalRow> {
-    Ok(ProposalRow { id: r.get(0)?, summary: r.get(1)?, source_text: r.get(2)?, created_by: r.get(3)?, status: r.get(4)?, created_at: r.get(5)?, decided_at: r.get(6)?, decision_note: r.get(7)? })
+    Ok(ProposalRow {
+        id: r.get(0)?,
+        summary: r.get(1)?,
+        source_text: r.get(2)?,
+        created_by: r.get(3)?,
+        status: r.get(4)?,
+        created_at: r.get(5)?,
+        decided_at: r.get(6)?,
+        decision_note: r.get(7)?,
+        withdrawn: r.get::<_, i64>(8)? != 0,
+    })
 }
 
-const PROPOSAL_COLS: &str = "id, summary, source_text, created_by, status, created_at, decided_at, decision_note";
+const PROPOSAL_COLS: &str = "id, summary, source_text, created_by, status, created_at, decided_at, decision_note, withdrawn";
 
 type RawChange = (String, String, String, String, String, Option<String>, Option<String>, Option<String>, String);
 
@@ -111,6 +123,11 @@ impl Store {
         Ok(())
     }
 
+    pub fn set_withdrawn(&mut self, id: &str) -> Result<()> {
+        self.conn.execute("UPDATE proposal SET withdrawn = 1 WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
     /// The reviewer's reason (kept with the rejected proposal; the agent can read it).
     pub fn set_decision_note(&mut self, id: &str, note: &str) -> Result<()> {
         self.conn.execute("UPDATE proposal SET decision_note = ?2 WHERE id = ?1", params![id, note])?;
@@ -151,9 +168,9 @@ impl Store {
 
     /// Rejected proposals with their fingerprints, newest first: (proposal, fingerprints).
     pub fn rejected_fingerprints(&self, _ctx: &AccessContext, limit: usize) -> Result<Vec<(ProposalRow, Vec<String>)>> {
-        let sql = format!("SELECT {PROPOSAL_COLS}, fingerprints FROM proposal WHERE status = 'rejected' AND fingerprints IS NOT NULL ORDER BY decided_at DESC LIMIT ?1");
+        let sql = format!("SELECT {PROPOSAL_COLS}, fingerprints FROM proposal WHERE status = 'rejected' AND withdrawn = 0 AND fingerprints IS NOT NULL ORDER BY decided_at DESC LIMIT ?1");
         let mut st = self.conn.prepare(&sql)?;
-        let rows = st.query_map([limit as i64], |r| Ok((proposal_from(r)?, r.get::<_, Option<String>>(8)?)))?;
+        let rows = st.query_map([limit as i64], |r| Ok((proposal_from(r)?, r.get::<_, Option<String>>(9)?)))?;
         let mut out = vec![];
         for row in rows {
             let (p, fp) = row?;

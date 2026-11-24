@@ -61,6 +61,11 @@ pub fn tool_definitions() -> Value {
         "annotations": {"readOnlyHint": true}
       },
       {
+        "name": "withdraw_proposal",
+        "description": "Take back one of YOUR OWN pending proposals (a mistake you noticed, a duplicate). Nothing of it reaches the user. It fails if another pending proposal already uses people it adds. To correct a proposal, prefer create_proposal with `replaces`.",
+        "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}, "reason": {"type": "string"}}, "required": ["id"]}
+      },
+      {
         "name": "create_proposal",
         "description": format!("Propose new people, links, and corrections to existing records. {SEARCH_FIRST} Read the guide resource (family-quilt://guide) for the exact shape. Link `kind`: birth (default; only birth counts as blood), adopted (ONLY if the user says adopted), foster, step, guardian, sealing, unknown (use when unsure, and explain in agent_note). Dates: YYYY, YYYY-MM or YYYY-MM-DD with an optional qualifier (exact|about|before|after). To edit an existing record give `changes` with from/to values you just read; propose the smallest change and say why in agent_note. You may propose removing a person or a link only when the user explicitly asks (it needs the user's explicit tick and is undoable); merging people is not possible. Do not assume anything was applied until the user approves."),
         "inputSchema": {"type": "object", "properties": {
@@ -68,7 +73,9 @@ pub fn tool_definitions() -> Value {
             "source_text": {"type": "string", "description": "The user's own words"},
             "people": {"type": "array", "items": {"type": "object"}},
             "relationships": {"type": "array", "items": {"type": "object"}},
-            "changes": {"type": "array", "items": {"type": "object"}}
+            "changes": {"type": "array", "items": {"type": "object"}},
+            "replaces": {"type": "string", "description": "id of one of YOUR OWN pending proposals that this one replaces: the old one is withdrawn and this takes its place (it must not refer to people the old one added)"},
+            "acknowledge_rejected": {"type": "array", "items": {"type": "string"}, "description": "ids of rejected proposals this one repeats on purpose after changing it because of the user's reason"}
         }, "required": ["summary"]}
       },
       {
@@ -103,6 +110,7 @@ pub fn call_tool(st: &Shared, agent: &str, name: &str, args: &Value) -> Value {
         "find_relationship" => ops::find_relationship(st, &s("a"), &s("b"), b("include_pending")),
         "get_graph" => ops::get_graph(st, &s("focus"), n("up", 2) as u32, n("down", 2) as u32, b("include_pending")),
         "create_proposal" => ops::create_proposal(st, agent, args),
+        "withdraw_proposal" => ops::withdraw_proposal(st, agent, &s("id"), Some(&s("reason"))),
         "list_my_proposals" => ops::list_my_proposals(st, agent),
         _ => Err(ApiError::new(StatusCode::NOT_FOUND, "unknown_tool", &format!("There is no tool called '{name}'. Tools: {}", tool_names().join(", ")))),
     };

@@ -255,6 +255,60 @@ pub fn reject(store: &mut Store, proposal_id: &str, by: &str) -> Result<RejectRe
 
 /// Reject, with the reason the agent will read (kept short).
 pub fn reject_with_note(store: &mut Store, proposal_id: &str, by: &str, note: Option<&str>) -> Result<RejectReport> {
+    reject_impl(store, proposal_id, by, note, false)
+}
+
+/// An agent takes back its own pending proposal (nothing of it was ever approved). Refused when another proposal
+/// depends on it: that one has to be dealt with first. The user is not asked, and the resend guard does not count it.
+pub fn withdraw(store: &mut Store, proposal_id: &str, agent_by: &str, reason: Option<&str>) -> Result<RejectReport> {
+    let proposal = store.get_proposal(&CTX, proposal_id)?;
+    if proposal.created_by != agent_by {
+        return Err(ReviewError::Invalid(vec![FieldError::new("$.id", "not_yours", "only the agent that sent a proposal can withdraw it")]));
+    }
+    if proposal.status != "pending" {
+        return Err(StoreError::Conflict(format!("this proposal was already {}; ask the user to undo it from History if it was approved", proposal.status)).into());
+    }
+    let dependents = dependent_proposals(store, proposal_id)?;
+    if !dependents.is_empty() {
+        return Err(ReviewError::Invalid(vec![FieldError::new(
+            "$.id",
+            "has_dependents",
+            format!("these pending proposals use records from this one: {}. Withdraw them first, or let the user decide.", dependents.join(", ")),
+        )]));
+    }
+    let note = format!("withdrawn by the agent{}", reason.map(str::trim).filter(|r| !r.is_empty()).map(|r| format!(": {r}")).unwrap_or_default());
+    reject_impl(store, proposal_id, agent_by, Some(&note), true)
+}
+
+/// Other pending proposals that link to, or edit, records this proposal adds.
+pub fn dependent_proposals(store: &Store, proposal_id: &str) -> Result<Vec<String>> {
+    let recs = store.proposal_records(&CTX, proposal_id)?;
+    let mut out: Vec<String> = vec![];
+    for pid in &recs.people {
+        for r in store.relationships_of(&CTX, pid)? {
+            if let Some(p) = r.proposal_id.filter(|p| p != proposal_id) {
+                out.push(p);
+            }
+        }
+        for c in store.open_changes_for(&CTX, "person", pid)? {
+            if c.proposal_id != proposal_id {
+                out.push(c.proposal_id);
+            }
+        }
+    }
+    for rid in &recs.relationships {
+        for c in store.open_changes_for(&CTX, "relationship", rid)? {
+            if c.proposal_id != proposal_id {
+                out.push(c.proposal_id);
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
+fn reject_impl(store: &mut Store, proposal_id: &str, by: &str, note: Option<&str>, withdrawn: bool) -> Result<RejectReport> {
     let proposal = store.get_proposal(&CTX, proposal_id)?;
     if proposal.status != "pending" {
         return Err(StoreError::Conflict(format!("this proposal was already {}", proposal.status)).into());
@@ -289,6 +343,9 @@ pub fn reject_with_note(store: &mut Store, proposal_id: &str, by: &str, note: Op
             s.set_change_status(&CTX, &c.id, "rejected")?;
         }
         s.decide_proposal(&CTX, proposal_id, "rejected")?;
+        if withdrawn {
+            s.set_withdrawn(proposal_id)?;
+        }
         if let Some(n) = note.map(str::trim).filter(|n| !n.is_empty()) {
             s.set_decision_note(proposal_id, &n.chars().take(500).collect::<String>())?;
         }

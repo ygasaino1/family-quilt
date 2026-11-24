@@ -14,8 +14,11 @@ pub struct Migration {
 }
 
 /// All migrations, in order. Version numbers start at 1 and have no gaps.
-pub const MIGRATIONS: &[Migration] =
-    &[Migration { version: 1, sql: include_str!("../migrations/001_init.sql") }, Migration { version: 2, sql: include_str!("../migrations/002_proposal_feedback.sql") }];
+pub const MIGRATIONS: &[Migration] = &[
+    Migration { version: 1, sql: include_str!("../migrations/001_init.sql") },
+    Migration { version: 2, sql: include_str!("../migrations/002_proposal_feedback.sql") },
+    Migration { version: 3, sql: include_str!("../migrations/003_proposal_withdrawn.sql") },
+];
 
 pub fn latest_version() -> u32 {
     MIGRATIONS.last().map_or(0, |m| m.version)

@@ -27,6 +27,9 @@ pub struct SubmitResult {
     pub relationships: Vec<IndexId>,
     pub changes: Vec<IndexId>,
     pub warnings: Vec<Warning>,
+    /// The proposal this one took the place of, if `replaces` was used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replaced: Option<String>,
     pub note: &'static str,
 }
 
@@ -179,7 +182,7 @@ pub fn submit(store: &mut Store, agent: &str, body: &Value) -> Result<SubmitResu
     let Some(top) = as_obj(body, "$", &mut errs) else {
         return Err(ReviewError::Invalid(errs.0));
     };
-    unknown_keys(top, "$", &["summary", "source_text", "people", "relationships", "changes", "acknowledge_rejected"], &mut errs);
+    unknown_keys(top, "$", &["summary", "source_text", "people", "relationships", "changes", "acknowledge_rejected", "replaces"], &mut errs);
     let summary = opt_str(top, "summary", "$", 300, &mut errs);
     if summary.is_none() {
         errs.add("$.summary", "required", "a short summary of the request is required (what the user asked for)");
@@ -577,6 +580,24 @@ pub fn submit(store: &mut Store, agent: &str, body: &Value) -> Result<SubmitResu
         }
     }
 
+    // ---- replacing one of this agent's own pending proposals ----
+    let replaces = top.get("replaces").and_then(Value::as_str).map(str::to_string);
+    if let Some(old) = &replaces {
+        let bad = |code: &'static str, msg: String| ReviewError::Invalid(vec![FieldError::new("$.replaces", code, msg)]);
+        let old_p = store.get_proposal(&CTX, old).map_err(|_| bad("not_found", "there is no proposal with that id".into()))?;
+        if old_p.created_by != created_by {
+            return Err(bad("not_yours", "you can only replace your own proposals".into()));
+        }
+        // The new proposal must stand on its own: what the old one adds disappears with it.
+        let old_recs = store.proposal_records(&CTX, old)?;
+        let gone: HashSet<&String> = old_recs.people.iter().chain(old_recs.relationships.iter()).collect();
+        let mentions: Vec<&str> = rels_in.iter().flat_map(|r| [r["a"].as_str(), r["b"].as_str()]).chain(changes_in.iter().map(|c| c["target_id"].as_str())).flatten().collect();
+        if let Some(m) = mentions.iter().find(|m| gone.contains(&m.to_string())) {
+            return Err(bad("refers_to_replaced", format!("{m} is added by the proposal you are replacing, so it will not exist; declare that person again with a ref instead.")));
+        }
+        crate::apply::withdraw(store, old, &created_by, Some("replaced by a new proposal"))?;
+    }
+
     // ---- write everything or nothing ----
     let mut fail: Option<(String, &'static str, String)> = None;
     let out = store.atomic(|s| {
@@ -637,6 +658,7 @@ pub fn submit(store: &mut Store, agent: &str, body: &Value) -> Result<SubmitResu
                 relationships,
                 changes,
                 warnings,
+                replaced: replaces,
                 note: "Nothing is final until the user approves this proposal in the app. Do not assume any of it was applied.",
             })
         }

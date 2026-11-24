@@ -77,6 +77,13 @@ pub fn create_proposal(st: &Shared, agent: &str, body: &Value) -> Result<Value, 
     Ok(serde_json::to_value(r).unwrap_or_default())
 }
 
+/// An agent takes back its own pending proposal.
+pub fn withdraw_proposal(st: &Shared, agent: &str, id: &str, reason: Option<&str>) -> Result<Value, ApiError> {
+    let by = format!("agent:{}", family_review::clean_agent_name(agent));
+    let r = family_review::apply::withdraw(&mut lock(st), id, &by, reason)?;
+    Ok(json!({"id": id, "status": "withdrawn", "note": "Nothing of it will appear for review. It does not count as a rejection by the user.", "affected_proposals": r.affected_proposals}))
+}
+
 pub fn list_my_proposals(st: &Shared, agent: &str) -> Result<Value, ApiError> {
     let store = lock(st);
     let created_by = format!("agent:{}", family_review::clean_agent_name(agent));
@@ -89,7 +96,7 @@ pub fn list_my_proposals(st: &Shared, agent: &str) -> Result<Value, ApiError> {
             .into_iter()
             .map(|e| json!({"kind": e["kind"], "target_id": e["target_id"], "field": e["field"], "you_proposed": e["original"], "approved_as": e["current"]}))
             .collect();
-        out.push(json!({"id": p.id, "summary": p.summary, "status": p.status, "created_at": p.created_at, "decided_at": p.decided_at, "rejection_note": p.decision_note, "reviewer_corrections": corrections, "changes": changes}));
+        out.push(json!({"id": p.id, "summary": p.summary, "status": if p.withdrawn { "withdrawn" } else { p.status.as_str() }, "created_at": p.created_at, "decided_at": p.decided_at, "rejection_note": p.decision_note, "reviewer_corrections": corrections, "changes": changes}));
     }
     Ok(json!({ "proposals": out, "note": "`pending` = waiting for the user; nothing in a pending proposal is final." }))
 }

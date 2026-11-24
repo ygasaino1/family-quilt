@@ -171,3 +171,49 @@ fn a_long_note_is_cut_and_stays_under_note() {
     let proposed = events(&s, &zoe).into_iter().find(|e| e["event"] == "proposed").unwrap();
     assert!(proposed["note"].as_str().unwrap().chars().count() <= 300);
 }
+
+#[test]
+fn an_agent_can_withdraw_or_replace_its_own_pending_proposal() {
+    use family_review::apply::withdraw;
+    let (mut s, kim) = base();
+    let first = submit(&mut s, "scribe", &add_zoe(&kim)).unwrap();
+    // Not yours: refused. Yours: withdrawn, nothing left in the tree, and it is not a rejection by the user.
+    assert!(withdraw(&mut s, &first.proposal_id, "agent:other", None).is_err());
+    withdraw(&mut s, &first.proposal_id, "agent:scribe", Some("duplicate")).unwrap();
+    let p = s.get_proposal(&CTX, &first.proposal_id).unwrap();
+    assert!(p.withdrawn && p.status == "rejected");
+    assert!(p.decision_note.unwrap().contains("withdrawn by the agent: duplicate"));
+    // The same request can be sent again at once (a withdrawal is not the user's no).
+    let second = submit(&mut s, "scribe", &add_zoe(&kim)).unwrap();
+    // Replace: the old one is withdrawn and the new one takes its place.
+    let mut better = add_zoe(&kim);
+    better["people"][0]["birth_date"] = json!("1991");
+    better["replaces"] = json!(second.proposal_id);
+    let third = submit(&mut s, "scribe", &better).unwrap();
+    assert_eq!(third.replaced.as_deref(), Some(second.proposal_id.as_str()));
+    assert!(s.get_proposal(&CTX, &second.proposal_id).unwrap().withdrawn);
+    assert_eq!(s.get_proposal(&CTX, &third.proposal_id).unwrap().status, "pending");
+    // Someone else's proposal cannot be replaced.
+    let mut steal = add_zoe(&kim);
+    steal["people"][0]["birth_date"] = json!("1992");
+    steal["replaces"] = json!(third.proposal_id);
+    assert_eq!(invalid(submit(&mut s, "other", &steal))[0].1, "not_yours");
+    // A replacement may not point at people the old proposal adds.
+    let zoe = review(&s, &third.proposal_id).unwrap().new_people[0].id.clone();
+    let bad = json!({"summary": "x", "replaces": third.proposal_id, "relationships": [{"type": "partnership", "a": zoe, "b": kim, "subtype": "unknown"}]});
+    assert_eq!(invalid(submit(&mut s, "scribe", &bad))[0].1, "refers_to_replaced");
+    // A withdrawn edit shows in the history as the agent's own doing, not as the user's no.
+    let edit = submit(&mut s, "scribe", &json!({"summary": "x", "changes": [{"target_type": "person", "target_id": kim, "op": "update", "fields": {"note": {"from": null, "to": "hi"}}}]})).unwrap();
+    withdraw(&mut s, &edit.proposal_id, "agent:scribe", None).unwrap();
+    let ev = events(&s, &kim);
+    assert!(ev.iter().any(|e| e["event"] == "edit_withdrawn" && e["who"]["type"] == "agent"), "{ev:?}");
+    // Another proposal that depends on it blocks the withdrawal.
+    let dep = json!({"summary": "Add Zoe's son", "people": [{"ref": "s", "given_name": "Sam", "sex": "M"}], "relationships": [{"type": "parent_child", "a": zoe, "b": "s"}]});
+    let d = submit(&mut s, "scribe", &dep).unwrap();
+    match withdraw(&mut s, &third.proposal_id, "agent:scribe", None) {
+        Err(ReviewError::Invalid(v)) => assert_eq!(v[0].code, "has_dependents"),
+        other => panic!("{other:?}"),
+    }
+    withdraw(&mut s, &d.proposal_id, "agent:scribe", None).unwrap();
+    withdraw(&mut s, &third.proposal_id, "agent:scribe", None).unwrap();
+}
