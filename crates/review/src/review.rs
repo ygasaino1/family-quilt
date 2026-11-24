@@ -317,21 +317,54 @@ pub fn proposal_warnings(store: &Store, proposal_id: &str) -> Result<Vec<Warning
             params: json!({"links": links.len()}),
         });
     }
-    // Possible duplicates of new people.
+    // Possible duplicates of new people: the same name among verified people and among people waiting in other
+    // proposals; "likely" when they also share a parent or partner (by id or by name).
+    let own: std::collections::HashSet<&String> = recs.people.iter().collect();
     for id in &recs.people {
         let Some(p) = load(id, &mut cache) else { continue };
-        let hits = store.search_people(&CTX, &family_store::SearchQuery { text: p.display_name.clone(), status: Some(family_store::Status::Verified), limit: 5 })?;
-        let same: Vec<String> = hits.iter().filter(|h| h.display_name.eq_ignore_ascii_case(&p.display_name)).map(|h| h.id.clone()).collect();
-        if !same.is_empty() {
-            let mut people = vec![id.clone()];
-            people.extend(same.iter().cloned());
-            out.push(Warning {
-                code: "possible_duplicate",
-                message: format!("A person named {} already exists in the tree; check this is not the same person.", p.display_name),
-                people,
-                params: json!({"existing": same}),
-            });
+        let key = family_store::names::search_key(&p.display_name);
+        if key.is_empty() {
+            continue;
         }
+        let hits = store.search_people(&CTX, &family_store::SearchQuery { text: p.display_name.clone(), status: None, limit: 30 })?;
+        let mine = neighbours(store, id)?;
+        let my_year = p.birth.as_ref().and_then(|b| b.date.to_string().get(..4).map(str::to_string));
+        let mut candidates: Vec<Value> = vec![];
+        let (mut same, mut likely) = (vec![], false);
+        for h in hits.iter().filter(|h| !own.contains(&h.id) && family_store::names::search_key(&h.display_name) == key) {
+            let theirs = neighbours(store, &h.id)?;
+            let shared = mine.iter().any(|(role, oid, okey)| theirs.iter().any(|(r2, o2, k2)| role == r2 && (oid == o2 || (!okey.is_empty() && okey == k2))));
+            let year = h.birth.as_ref().and_then(|b| b.date.to_string().get(..4).map(str::to_string));
+            let years_differ = matches!((&my_year, &year), (Some(a), Some(b)) if a != b);
+            likely |= shared && !years_differ;
+            let other = load(&h.id, &mut cache);
+            let mut rel_names = |role: &str| theirs.iter().filter(|(r, ..)| r == role).filter_map(|(_, oid, _)| load(oid, &mut cache).map(|c| c.display_name)).collect::<Vec<_>>();
+            candidates.push(json!({
+                "id": h.id, "status": h.status, "proposal_id": other.as_ref().and_then(|c| c.proposal_id.clone()), "birth_year": year,
+                "partners": rel_names("partner"), "parents": rel_names("parent"), "shares_a_relative": shared, "birth_years_differ": years_differ,
+            }));
+            same.push(h.id.clone());
+        }
+        if same.is_empty() {
+            continue;
+        }
+        let mut people = vec![id.clone()];
+        people.extend(same.iter().cloned());
+        out.push(if likely {
+            Warning {
+                code: "likely_duplicate",
+                message: format!("{} already exists in the tree or in another waiting proposal, with the same name and a parent or partner in common. This is very likely the same person: do not add them again; link to the existing id (see params.candidates), or withdraw this proposal.", p.display_name),
+                people,
+                params: json!({"existing": same, "candidates": candidates}),
+            }
+        } else {
+            Warning {
+                code: "possible_duplicate",
+                message: format!("A person named {} already exists in the tree or in another waiting proposal; check this is not the same person (see params.candidates).", p.display_name),
+                people,
+                params: json!({"existing": same, "candidates": candidates}),
+            }
+        });
     }
     // Impact of link-kind edits.
     if !kind_over.is_empty() {
@@ -439,6 +472,22 @@ pub fn dependencies(store: &Store, proposal_id: &str) -> Result<Vec<Dependency>>
         if let Ok(p) = store.get_proposal(&CTX, &id) {
             out.push(Dependency { proposal_id: id, summary: p.summary, status: p.status, created_by: p.created_by });
         }
+    }
+    Ok(out)
+}
+
+/// A person's parents, children and partners as `(role, id, name key)`; the key lets the same relative recorded twice
+/// (once in each of two proposals) still be recognised as the same.
+fn neighbours(store: &Store, id: &str) -> Result<Vec<(String, String, String)>> {
+    let mut out = vec![];
+    for r in store.relationships_of(&CTX, id)? {
+        let (role, other) = match r.rel_type {
+            RelType::ParentChild if r.person_a == id => ("child", &r.person_b),
+            RelType::ParentChild => ("parent", &r.person_a),
+            _ => ("partner", if r.person_a == id { &r.person_b } else { &r.person_a }),
+        };
+        let key = store.get_person(&CTX, other).map(|p| family_store::names::search_key(&p.display_name)).unwrap_or_default();
+        out.push((role.to_string(), other.clone(), key));
     }
     Ok(out)
 }

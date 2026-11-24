@@ -23,7 +23,7 @@ export function onDataChanged() {
 const val = (v) => (v === null || v === undefined || v === '' ? h('i', { class: 'muted' }, t('review.empty')) : typeof v === 'object' ? JSON.stringify(v) : String(v));
 const agentName = (by) => String(by || '').replace(/^agent:/, '') || t('review.someone');
 const born = (q) => (q.birth ? String(q.birth.date ?? q.birth) : '');
-const WARN_CODES = ['parent_too_young', 'parent_too_old', 'parent_died_before_birth', 'death_before_birth', 'possible_duplicate', 'link_kind_impact', 'person_removal_impact'];
+const WARN_CODES = ['parent_too_young', 'parent_too_old', 'parent_died_before_birth', 'death_before_birth', 'possible_duplicate', 'likely_duplicate', 'link_kind_impact', 'person_removal_impact'];
 
 export async function show(id) {
   selected = id || selected;

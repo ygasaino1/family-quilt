@@ -61,6 +61,13 @@ Only by proposal. Propose the **smallest change that fixes the problem**, includ
 * **Not possible**: merging people, and editing ids, status or timestamps.
 * You may link to, or edit, people and links that are still waiting for review (yours or another proposal's). The user has to approve that proposal first; the review screen shows the dependency.
 
+## Read the warnings in the result
+
+`create_proposal` returns `warnings` (and the new people's ids: `people: [{ref, id}]`, `relationships`, `changes`). Act on them:
+
+* `likely_duplicate`: a person with the same name and a parent or partner in common already exists, in the tree or in another waiting proposal (`params.candidates` has their id, status, `proposal_id`, birth year, partners and parents). Do not add them again: withdraw or replace your proposal and link to the existing id.
+* `possible_duplicate`: the same name exists (possibly a relative with the same name: check birth years and relatives).
+
 ## Taking back or correcting your own pending proposal
 
 * A mistake in a proposal that is still `pending`: send the corrected proposal with `"replaces": "<old proposal id>"`. The old one is withdrawn and the new one takes its place in one step. The new proposal must stand on its own: do not link to or edit people the old one added (declare them again with a `ref`).

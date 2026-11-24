@@ -217,3 +217,29 @@ fn an_agent_can_withdraw_or_replace_its_own_pending_proposal() {
     withdraw(&mut s, &d.proposal_id, "agent:scribe", None).unwrap();
     withdraw(&mut s, &third.proposal_id, "agent:scribe", None).unwrap();
 }
+
+#[test]
+fn duplicates_are_found_among_waiting_people_and_judged_by_relatives() {
+    let (mut s, kim) = base();
+    let fakher = |year: &str| {
+        json!({"summary": "Add Fakher", "people": [{"ref": "f", "given_name": "فاخر", "family_name": "فرحی", "sex": "F", "birth_date": year}],
+               "relationships": [{"type": "partnership", "a": kim, "b": "f", "subtype": "married"}]})
+    };
+    let first = submit(&mut s, "scribe", &fakher("1930")).unwrap();
+    assert!(first.warnings.iter().all(|w| w.code != "likely_duplicate" && w.code != "possible_duplicate"), "{:?}", first.warnings);
+    // Same name, same spouse, another proposal (still waiting): very likely the same person.
+    let second = submit(&mut s, "scribe", &fakher("1930")).unwrap();
+    let w = second.warnings.iter().find(|w| w.code == "likely_duplicate").expect("likely_duplicate");
+    let c = &w.params["candidates"][0];
+    assert_eq!(c["status"], json!("pending"));
+    assert_eq!(c["shares_a_relative"], json!(true));
+    assert_eq!(c["partners"][0], json!("Kim Tester"));
+    assert!(c["proposal_id"].is_string());
+    // Same name and spouse but clearly another birth year: only a "possible" duplicate.
+    let third = submit(&mut s, "scribe", &fakher("1960")).unwrap();
+    assert!(third.warnings.iter().any(|w| w.code == "possible_duplicate"));
+    assert!(third.warnings.iter().all(|w| w.code != "likely_duplicate"));
+    // A different name is left alone.
+    let other = submit(&mut s, "scribe", &json!({"summary": "x", "people": [{"ref": "o", "given_name": "Nima", "family_name": "Farahi"}]})).unwrap();
+    assert!(other.warnings.iter().all(|w| !w.code.ends_with("duplicate")));
+}

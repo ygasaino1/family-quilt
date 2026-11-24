@@ -347,6 +347,7 @@
   "warn.parent_died_before_birth": "Parent died before the birth",
   "warn.death_before_birth": "Death before birth",
   "warn.possible_duplicate": "Possible duplicate",
+  "warn.likely_duplicate": "Very likely a duplicate",
   "warn.link_kind_impact": "Changes who counts as blood relative",
   "warn.person_removal_impact": "Removing a person",
   "ago.now": "just now",
