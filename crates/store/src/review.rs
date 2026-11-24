@@ -257,6 +257,20 @@ impl Store {
         })
     }
 
+    /// Every live person this proposal created, whatever their status now.
+    pub fn people_of_proposal(&self, _ctx: &AccessContext, proposal_id: &str) -> Result<Vec<String>> {
+        let mut s = self.conn.prepare("SELECT id FROM person WHERE proposal_id = ?1 AND deleted_at IS NULL ORDER BY id")?;
+        let v = s.query_map([proposal_id], |r| r.get(0))?.collect::<std::result::Result<Vec<String>, _>>()?;
+        Ok(v)
+    }
+
+    /// Every live link this proposal created, whatever its status now.
+    pub fn links_of_proposal(&self, _ctx: &AccessContext, proposal_id: &str) -> Result<Vec<String>> {
+        let mut s = self.conn.prepare("SELECT id FROM relationship WHERE proposal_id = ?1 AND deleted_at IS NULL ORDER BY id")?;
+        let v = s.query_map([proposal_id], |r| r.get(0))?.collect::<std::result::Result<Vec<String>, _>>()?;
+        Ok(v)
+    }
+
     /// Approve: this proposal's pending people and links become verified (one revision each).
     pub fn verify_proposal_records(&mut self, ctx: &AccessContext, proposal_id: &str, by: &str) -> Result<ProposalRecords> {
         let recs = self.proposal_records(ctx, proposal_id)?;

@@ -15,6 +15,8 @@ pub fn routes() -> Router<Shared> {
         .route("/guide", get(guide))
         .route("/people", get(people))
         .route("/people/{id}", get(person))
+        .route("/directory", get(directory))
+        .route("/proposals/{id}", get(proposal))
         .route("/relationship", get(relationship))
         .route("/graph", get(graph))
         .route("/proposals", get(list).post(create))
@@ -44,7 +46,41 @@ struct PeopleQ {
 
 async fn people(State(st): State<Shared>, Extension(a): Extension<AgentName>, Query(q): Query<PeopleQ>) -> Result<Json<Value>, ApiError> {
     st.log_activity(name(&a), "searched people");
-    ops::search_people(&st, q.q.as_deref().unwrap_or(""), q.limit.unwrap_or(20), q.pending == Some(1)).map(Json)
+    ops::search_people(&st, q.q.as_deref().unwrap_or(""), q.limit.unwrap_or(50), q.pending == Some(1)).map(Json)
+}
+
+#[derive(Deserialize)]
+struct DirQ {
+    status: Option<String>,
+    name: Option<String>,
+    sex: Option<String>,
+    no_parents: Option<bool>,
+    no_children: Option<bool>,
+    no_partners: Option<bool>,
+    created_by_proposal: Option<String>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+}
+
+async fn directory(State(st): State<Shared>, Extension(a): Extension<AgentName>, Query(q): Query<DirQ>) -> Result<Json<Value>, ApiError> {
+    st.log_activity(name(&a), "listed people");
+    let o = family_review::query::ListOpts {
+        status: q.status.unwrap_or_default(),
+        name: q.name,
+        sex: q.sex,
+        no_parents: q.no_parents.unwrap_or(false),
+        no_children: q.no_children.unwrap_or(false),
+        no_partners: q.no_partners.unwrap_or(false),
+        created_by_proposal: q.created_by_proposal,
+        offset: q.offset.unwrap_or(0),
+        limit: q.limit.unwrap_or(0),
+    };
+    ops::list_people(&st, &o).map(Json)
+}
+
+async fn proposal(State(st): State<Shared>, Extension(a): Extension<AgentName>, Path(id): Path<String>) -> Result<Json<Value>, ApiError> {
+    st.log_activity(name(&a), "read a proposal");
+    ops::get_proposal(&st, name(&a), &id).map(Json)
 }
 
 #[derive(Deserialize)]

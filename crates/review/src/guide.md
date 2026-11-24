@@ -10,7 +10,19 @@ until the user tells you it was approved.
    Proposing a duplicate wastes the user's review time. Use `get_person` to read details and links.
 2. **Ask how people are related** with `find_relationship` when the user's wording is ambiguous.
 3. **Propose** with `create_proposal` (`POST /agent/v1/proposals`). One proposal = one request from the user, reviewed as a whole.
-4. Check the result with `list_my_proposals`. Statuses: `pending`, `approved`, `rejected`.
+4. Check the result with `list_my_proposals`. Statuses: `pending`, `approved`, `rejected`, `withdrawn`.
+   `get_proposal` (`GET /agent/v1/proposals/{id}`) shows one of your proposals in full, with the ids of the people it added.
+5. **Look around.** `search_people` returns cards (birth year, parents, partners, number of children and, for people
+   still waiting, the `proposal_id`) so you can tell same-named people apart. `list_people`
+   (`GET /agent/v1/directory`) pages through everyone without a name: `status` (verified, pending, all), `name`, `sex`,
+   `no_parents`, `no_children`, `no_partners` (loose ends), `created_by_proposal`, `offset`, `limit` (default 50,
+   max 500). Follow `next_offset` until it is null.
+
+## Names
+
+Give `given_name` and `family_name` when the name splits that way. When it does not (one word, patronymics, a name in
+another script), use `full_name` and, if it is not Latin script, `script` (for example `"script": "Arab"`). Do not
+force a name into given and family parts just to fill both.
 
 ## Proposal shape
 

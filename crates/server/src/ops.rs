@@ -18,9 +18,39 @@ pub fn search_people(st: &Shared, q: &str, limit: usize, pending: bool) -> Resul
         return Err(ApiError::bad_request("`q` (part of a name) is required"));
     }
     let store = lock(st);
-    let people = query::search(&store, q, limit, pending)?;
+    let people = query::search_cards(&store, q, limit, pending)?;
     let rejected = previously_rejected(&store, q);
     Ok(json!({ "people": people, "includes_pending": pending, "previously_rejected": rejected }))
+}
+
+/// Page through people with filters (the search needs a name; this does not).
+pub fn list_people(st: &Shared, o: &query::ListOpts) -> Result<Value, ApiError> {
+    let store = lock(st);
+    Ok(query::list_people(&store, o)?)
+}
+
+/// One of the agent's own proposals in full: its people, links and edits, with ids and current status.
+pub fn get_proposal(st: &Shared, agent: &str, id: &str) -> Result<Value, ApiError> {
+    let store = lock(st);
+    let p = store.get_proposal(&CTX, id)?;
+    let mine = format!("agent:{}", family_review::clean_agent_name(agent));
+    if p.created_by != mine {
+        return Err(ApiError::new(axum::http::StatusCode::NOT_FOUND, "not_found", "You have no proposal with that id (see list_my_proposals)."));
+    }
+    let people: Vec<Value> = store.people_of_proposal(&CTX, id)?.iter().filter_map(|i| query::card(&store, i).ok()).collect();
+    let mut links = vec![];
+    for lid in store.links_of_proposal(&CTX, id)? {
+        let r = store.get_relationship(&CTX, &lid)?;
+        links.push(json!({"id": r.id, "type": r.rel_type, "a": r.person_a, "b": r.person_b, "kind": r.kind, "subtype": r.subtype, "status": r.status}));
+    }
+    let changes: Vec<Value> =
+        store.changes_of(&CTX, id)?.into_iter().map(|c| json!({"id": c.id, "target_type": c.target_type, "target_id": c.target_id, "op": c.op, "patch": c.patch, "status": c.status})).collect();
+    Ok(json!({
+        "id": p.id, "summary": p.summary, "status": if p.withdrawn { "withdrawn" } else { p.status.as_str() },
+        "created_at": p.created_at, "decided_at": p.decided_at, "rejection_note": p.decision_note,
+        "people": people, "relationships": links, "changes": changes,
+        "note": "People of a rejected or withdrawn proposal are discarded and no longer exist."
+    }))
 }
 
 pub fn get_person(st: &Shared, id: &str) -> Result<Value, ApiError> {

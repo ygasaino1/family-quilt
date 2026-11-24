@@ -295,3 +295,19 @@ approval stays one undoable batch. Editing an item in place (changing what the a
   need a small log of their own. Agents are told about it only through the derived views above.
 - Known limit: history of a link shows only the link's own events; edits of names appear under the person with the name's
   label. `user_confirmed` is information for now; the server does not refuse proposals that touch those fields.
+
+## Withdraw, duplicates and listing for agents (2026-11-24)
+
+Prompted by an agent's review of the MCP design after a large import.
+
+- **Withdraw / replace.** An agent can take back its own pending proposal (`withdraw_proposal`) or send a corrected one
+  with `replaces`, which withdraws the old one first. Withdrawn is a flag on a rejected proposal (the status check stays
+  pending/approved/rejected); withdrawn proposals do not count for the resend guard. It fails if another pending proposal
+  already uses people the old one added.
+- **Duplicates.** Warnings now cover people waiting in other proposals and use shared relatives (by id or name key):
+  `likely_duplicate` (same name key plus a shared parent or partner, birth years not differing) and `possible_duplicate`.
+- **Listing.** `list_people` (`/agent/v1/directory`) pages with filters, including loose ends (`no_parents`, ...).
+  Search results are cards with parents, partners, children count, birth year and `proposal_id`; `display_name` stays for
+  older clients. `get_proposal` returns one of the agent's own proposals (another agent's id is NotFound). The default
+  search limit is 50. Both new tools are read-only, so the "no approve/edit/delete" rule still holds (nine tools).
+- **Not done:** a `calendar` field for Solar Hijri dates (separate design decision).

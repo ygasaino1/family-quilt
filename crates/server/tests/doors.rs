@@ -218,7 +218,7 @@ fn mcp(p: u16, body: Value, extra: &[(&str, &str)]) -> (u16, String, Value) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn mcp_has_exactly_seven_tools_and_no_way_to_approve_edit_or_delete() {
+async fn mcp_has_exactly_nine_tools_and_no_way_to_approve_edit_or_delete() {
     let s = start().await;
     let p = s.port;
     let (st, head, init) = mcp(
@@ -235,7 +235,7 @@ async fn mcp_has_exactly_seven_tools_and_no_way_to_approve_edit_or_delete() {
     let (_, _, list) = mcp(p, json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}), &[("Mcp-Session-Id", &sid)]);
     let mut names: Vec<String> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
     names.sort();
-    assert_eq!(names, ["create_proposal", "find_relationship", "get_graph", "get_person", "list_my_proposals", "search_people", "withdraw_proposal"]);
+    assert_eq!(names, ["create_proposal", "find_relationship", "get_graph", "get_person", "get_proposal", "list_my_proposals", "list_people", "search_people", "withdraw_proposal"]);
     for n in &names {
         for banned in ["approve", "reject", "edit", "delete", "update", "remove", "merge", "undo"] {
             assert!(!n.contains(banned), "{n}");
@@ -265,6 +265,25 @@ async fn mcp_has_exactly_seven_tools_and_no_way_to_approve_edit_or_delete() {
     assert_eq!(r["result"]["isError"], false);
     let r = call(7, "create_proposal", json!({"summary": "via mcp", "people": [{"ref": "x", "full_name": "Mcp Person"}], "relationships": [{"type": "parent_child", "a": gid, "b": "x"}]}));
     assert_eq!(r["result"]["isError"], false, "{r}");
+    let created: Value = serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    let pid = created["proposal_id"].as_str().or(created["id"].as_str()).unwrap_or_default().to_string();
+    assert!(!pid.is_empty(), "{created}");
+    // get_proposal returns the new person with an id; list_people finds the loose end and pages.
+    let r = call(41, "get_proposal", json!({"id": pid}));
+    let gp: Value = serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(gp["people"][0]["name"], "Mcp Person");
+    assert_eq!(gp["people"][0]["proposal_id"], pid.as_str());
+    assert_eq!(gp["people"][0]["parents"][0]["id"], gid.as_str());
+    assert_eq!(gp["relationships"].as_array().unwrap().len(), 1);
+    let r = call(42, "list_people", json!({"status": "pending", "created_by_proposal": pid, "limit": 1}));
+    let lp: Value = serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!((lp["total"].as_u64(), lp["next_offset"].is_null()), (Some(1), true));
+    let r = call(43, "list_people", json!({"status": "all", "no_parents": true, "limit": 1}));
+    let lp: Value = serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert!(lp["total"].as_u64().unwrap() >= 1 && lp["people"].as_array().unwrap().len() == 1);
+    assert_eq!(call(44, "list_people", json!({"status": "nope"}))["result"]["isError"], true);
+    // Another agent's proposal is not readable.
+    assert_eq!(call(45, "get_proposal", json!({"id": "does-not-exist"}))["result"]["isError"], true);
     let (_, status) = ui(p, "GET", "/api/status", None);
     assert_eq!(status["pending_proposals"], 1);
     let (_, list) = ui(p, "GET", "/api/proposals?status=pending", None);
@@ -329,7 +348,7 @@ async fn stdio_bridge_forwards_and_explains_when_the_app_is_closed() {
     .unwrap_or_else(|_| unreachable!());
     assert_eq!(r_closed["result"]["isError"], true);
     assert!(r_closed["result"]["content"][0]["text"].as_str().unwrap().contains("Open the Family Tree app first"));
-    assert_eq!(r_list["result"]["tools"].as_array().unwrap().len(), 7);
+    assert_eq!(r_list["result"]["tools"].as_array().unwrap().len(), 9);
     assert!(r_note.is_none());
     // Without the endpoint file the open case is still "closed"; write it and retry.
     token::write_endpoint(&dir, s.port).unwrap();
@@ -358,7 +377,7 @@ async fn settings_snippets_and_backup() {
     assert!(v["claude_desktop_config"].as_str().unwrap().contains("--mcp-stdio"));
     assert!(v["claude_code_http"].as_str().unwrap().contains("--transport http"));
     let (_, t) = ui(p, "POST", "/api/settings/agent/test", None);
-    assert_eq!(t["tools"].as_array().unwrap().len(), 7);
+    assert_eq!(t["tools"].as_array().unwrap().len(), 9);
     let (st, head, body) = raw(p, &req("GET", "/api/backup", &[("Host", &format!("127.0.0.1:{p}")), ("Sec-Fetch-Site", "same-origin")], None));
     assert_eq!(st, 200);
     assert!(head.contains("attachment"));

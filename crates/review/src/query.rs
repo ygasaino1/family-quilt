@@ -15,6 +15,115 @@ pub fn search(store: &Store, text: &str, limit: usize, include_pending: bool) ->
     Ok(store.search_people(&CTX, &SearchQuery { text: text.to_string(), status, limit })?)
 }
 
+fn year_of(d: &Option<family_store::FuzzyDate>) -> Option<u16> {
+    d.as_ref().map(|d| d.date.year())
+}
+
+/// A short card for one person: enough to tell two people with the same name apart.
+pub fn card(store: &Store, id: &str) -> Result<Value> {
+    let p = store.get_person(&CTX, id)?;
+    let (mut parents, mut partners, mut children) = (vec![], vec![], 0usize);
+    for r in store.relationships_of(&CTX, id)? {
+        let name_of = |o: &str| store.get_person(&CTX, o).map(|p| p.display_name).unwrap_or_default();
+        match (r.rel_type, r.person_a == id) {
+            (RelType::ParentChild, true) => children += 1,
+            (RelType::ParentChild, false) => parents.push(json!({"id": r.person_a, "name": name_of(&r.person_a)})),
+            (RelType::Partnership, a_is_me) => {
+                let o = if a_is_me { r.person_b.clone() } else { r.person_a.clone() };
+                partners.push(json!({"id": o, "name": name_of(&o)}));
+            }
+        }
+    }
+    Ok(json!({
+        "id": p.id, "name": p.display_name, "display_name": p.display_name, "sex": p.sex, "is_living": p.is_living,
+        "birth_year": year_of(&p.birth), "death_year": year_of(&p.death),
+        "status": p.status, "proposal_id": p.proposal_id,
+        "parents": parents, "partners": partners, "children_count": children,
+    }))
+}
+
+pub fn search_cards(store: &Store, text: &str, limit: usize, include_pending: bool) -> Result<Vec<Value>> {
+    search(store, text, limit, include_pending)?.iter().map(|s| card(store, &s.id)).collect()
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct ListOpts {
+    /// `verified` (default), `pending` or `all`.
+    pub status: String,
+    pub name: Option<String>,
+    pub sex: Option<String>,
+    pub no_parents: bool,
+    pub no_children: bool,
+    pub no_partners: bool,
+    pub created_by_proposal: Option<String>,
+    pub offset: usize,
+    pub limit: usize,
+}
+
+pub const LIST_DEFAULT: usize = 50;
+pub const LIST_MAX: usize = 500;
+
+/// Page through people. Filters combine with AND. Returns cards plus paging info.
+pub fn list_people(store: &Store, o: &ListOpts) -> Result<Value> {
+    let status = if o.status.is_empty() { "verified" } else { o.status.as_str() };
+    if !["verified", "pending", "all"].contains(&status) {
+        return Err(StoreError::invalid("status", "use verified, pending or all").into());
+    }
+    let g = store.load_graph(&CTX, GraphFilter { include_pending: status != "verified" })?;
+    let n = g.people.len();
+    let (mut has_parent, mut has_child, mut has_partner) = (vec![false; n], vec![false; n], vec![false; n]);
+    for l in &g.links {
+        let (a, b) = (l.a as usize, l.b as usize);
+        match l.rel_type {
+            RelType::ParentChild => {
+                has_child[a] = true;
+                has_parent[b] = true;
+            }
+            RelType::Partnership => {
+                has_partner[a] = true;
+                has_partner[b] = true;
+            }
+        }
+    }
+    let of_proposal: Option<HashSet<String>> = match &o.created_by_proposal {
+        Some(p) => Some(store.people_of_proposal(&CTX, p)?.into_iter().collect()),
+        None => None,
+    };
+    let needle = o.name.as_deref().map(family_store::names::search_key).filter(|k| !k.is_empty());
+    let sex = o.sex.as_deref().map(|s| s.to_lowercase());
+    let mut ids: Vec<&str> = vec![];
+    for (i, p) in g.people.iter().enumerate() {
+        if status == "pending" && p.status != Status::Pending {
+            continue;
+        }
+        if o.no_parents && has_parent[i] || o.no_children && has_child[i] || o.no_partners && has_partner[i] {
+            continue;
+        }
+        if let Some(s) = &sex {
+            if p.sex.as_str() != s {
+                continue;
+            }
+        }
+        if let Some(set) = &of_proposal {
+            if !set.contains(&p.id) {
+                continue;
+            }
+        }
+        if let Some(k) = &needle {
+            if !family_store::names::search_key(&p.display_name).contains(k.as_str()) {
+                continue;
+            }
+        }
+        ids.push(&p.id);
+    }
+    ids.sort();
+    let total = ids.len();
+    let limit = if o.limit == 0 { LIST_DEFAULT } else { o.limit.min(LIST_MAX) };
+    let page: Vec<Value> = ids.iter().skip(o.offset).take(limit).map(|id| card(store, id)).collect::<Result<_>>()?;
+    let next = o.offset + page.len();
+    Ok(json!({"people": page, "total": total, "offset": o.offset, "next_offset": if next < total { json!(next) } else { Value::Null }, "status": status}))
+}
+
 #[derive(Debug, Serialize)]
 pub struct LinkedPerson {
     pub link_id: String,
@@ -213,7 +322,7 @@ pub fn neighbourhood(store: &Store, focus: &str, up: u32, down: u32, include_pen
         .iter()
         .map(|i| {
             let p = g.person(*i);
-            json!({"id": p.id, "name": p.display_name, "sex": p.sex, "birth": p.birth, "death": p.death, "is_living": p.is_living, "status": p.status})
+            json!({"id": p.id, "name": p.display_name, "display_name": p.display_name, "sex": p.sex, "birth": p.birth, "death": p.death, "is_living": p.is_living, "status": p.status})
         })
         .collect();
     let links: Vec<Value> = g

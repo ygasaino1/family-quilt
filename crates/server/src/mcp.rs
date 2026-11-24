@@ -34,12 +34,31 @@ pub fn tool_definitions() -> Value {
     json!([
       {
         "name": "search_people",
-        "description": format!("Find people by part of a name (any script). {SEARCH_FIRST} Returns id, name, sex, birth/death and status, and `previously_rejected` (people from proposals the user rejected: do not propose them again)."),
+        "description": format!("Find people by part of a name (any script). {SEARCH_FIRST} Returns cards (id, name, sex, birth_year, status, `proposal_id` if still waiting, parents, partners, children_count) so same-named people can be told apart, and `previously_rejected` (people from proposals the user rejected: do not propose them again)."),
         "inputSchema": {"type": "object", "properties": {
             "q": {"type": "string", "description": "Part of a name"},
-            "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Default 20"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "description": "Default 50"},
             "include_pending": {"type": "boolean", "description": "Also show people still waiting for review"}
         }, "required": ["q"]},
+        "annotations": {"readOnlyHint": true}
+      },
+      {
+        "name": "list_people",
+        "description": "Page through people without needing a name. Filters combine: `status` verified (default), pending or all; `name` substring; `sex`; `no_parents`, `no_children`, `no_partners` (find loose ends); `created_by_proposal` (one proposal's people). Returns cards plus `total` and `next_offset` (null at the end).",
+        "inputSchema": {"type": "object", "properties": {
+            "status": {"type": "string", "enum": ["verified", "pending", "all"]},
+            "name": {"type": "string"}, "sex": {"type": "string"},
+            "no_parents": {"type": "boolean"}, "no_children": {"type": "boolean"}, "no_partners": {"type": "boolean"},
+            "created_by_proposal": {"type": "string"},
+            "offset": {"type": "integer", "minimum": 0},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 500, "description": "Default 50"}
+        }},
+        "annotations": {"readOnlyHint": true}
+      },
+      {
+        "name": "get_proposal",
+        "description": "One of YOUR proposals in full: the people it added (with ids), its links, its edits and their status, and the user's rejection_note. Use it to recover ids after create_proposal or to see what is still waiting.",
+        "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
         "annotations": {"readOnlyHint": true}
       },
       {
@@ -105,7 +124,22 @@ pub fn call_tool(st: &Shared, agent: &str, name: &str, args: &Value) -> Value {
     let n = |k: &str, d: u64| args.get(k).and_then(Value::as_u64).unwrap_or(d);
     st.log_activity(agent, &format!("MCP {name}"));
     let r = match name {
-        "search_people" => ops::search_people(st, &s("q"), n("limit", 20) as usize, b("include_pending")),
+        "search_people" => ops::search_people(st, &s("q"), n("limit", 50) as usize, b("include_pending")),
+        "list_people" => {
+            let o = family_review::query::ListOpts {
+                status: s("status"),
+                name: Some(s("name")).filter(|x| !x.is_empty()),
+                sex: Some(s("sex")).filter(|x| !x.is_empty()),
+                no_parents: b("no_parents"),
+                no_children: b("no_children"),
+                no_partners: b("no_partners"),
+                created_by_proposal: Some(s("created_by_proposal")).filter(|x| !x.is_empty()),
+                offset: n("offset", 0) as usize,
+                limit: n("limit", 0) as usize,
+            };
+            ops::list_people(st, &o)
+        }
+        "get_proposal" => ops::get_proposal(st, agent, &s("id")),
         "get_person" => ops::get_person_history(st, &s("id"), b("history_all")),
         "find_relationship" => ops::find_relationship(st, &s("a"), &s("b"), b("include_pending")),
         "get_graph" => ops::get_graph(st, &s("focus"), n("up", 2) as u32, n("down", 2) as u32, b("include_pending")),
