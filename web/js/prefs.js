@@ -1,5 +1,5 @@
 // Per-viewer conveniences kept in the browser; the page works when storage is unavailable.
-const defaults = { lang: 'en', theme: 'auto', scale: '1', privacy: '0', live: '0', outlines: '1', label: 'full', layout: 'tree', engine: 'port', hl: 'all', blood: '1', literal: '1', case: '0' };
+const defaults = { lang: 'en', calendar: 'gregorian', theme: 'auto', scale: '1', privacy: '0', live: '0', outlines: '1', label: 'full', layout: 'tree', engine: 'port', hl: 'all', blood: '1', literal: '1', case: '0' };
 const mem = {};
 export function pref(key) {
   try {

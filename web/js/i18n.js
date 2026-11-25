@@ -1,3 +1,5 @@
+import { pref } from './prefs.js';
+
 // Translation tables: every visible string goes through t(key). English is the source table.
 // Languages other than English are added by dropping locales/<code>.json next to en.json.
 // "qps" is a pseudo-language that makes untranslated or truncated text easy to spot.
@@ -46,16 +48,18 @@ export function fmtNumber(n) {
   return new Intl.NumberFormat(lang === 'qps' ? 'en' : lang).format(n);
 }
 
-/** "1950-03-02" | "1950-03" | "1950" (+ qualifier) -> text. */
+/** "1950-03-02" | "1950-03" | "1950" (+ qualifier) -> text. Stored dates are Gregorian; the calendar setting only changes how they read. */
 export function fmtDate(s, qualifier) {
   if (!s) return '';
   const m = /^(\d{4})(?:-(\d\d))?(?:-(\d\d))?$/.exec(s);
   let text = s;
   if (m) {
-    const l = lang === 'qps' ? 'en' : lang;
+    const jalali = pref('calendar') === 'jalali';
+    const l = (lang === 'qps' ? 'en' : lang) + (jalali ? '-u-ca-persian' : '');
+    // A Jalali year or month is shown for the middle of the stored Gregorian one, which is where most of it falls.
     if (m[3]) text = new Intl.DateTimeFormat(l, { dateStyle: 'medium', timeZone: 'UTC' }).format(new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])));
-    else if (m[2]) text = new Intl.DateTimeFormat(l, { year: 'numeric', month: 'long', timeZone: 'UTC' }).format(new Date(Date.UTC(+m[1], +m[2] - 1, 1)));
-    else text = m[1];
+    else if (m[2]) text = new Intl.DateTimeFormat(l, { year: 'numeric', month: 'long', timeZone: 'UTC' }).format(new Date(Date.UTC(+m[1], +m[2] - 1, jalali ? 15 : 1)));
+    else text = jalali ? new Intl.DateTimeFormat(l, { year: 'numeric', timeZone: 'UTC' }).format(new Date(Date.UTC(+m[1], 6, 1))) : m[1];
   }
   if (qualifier && qualifier !== 'exact') return t('date.' + qualifier, { date: text });
   return text;

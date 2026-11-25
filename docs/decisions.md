@@ -310,4 +310,20 @@ Prompted by an agent's review of the MCP design after a large import.
   Search results are cards with parents, partners, children count, birth year and `proposal_id`; `display_name` stays for
   older clients. `get_proposal` returns one of the agent's own proposals (another agent's id is NotFound). The default
   search limit is 50. Both new tools are read-only, so the "no approve/edit/delete" rule still holds (nine tools).
-- **Not done:** a `calendar` field for Solar Hijri dates (separate design decision).
+- **Calendars:** see the next section.
+
+## Calendars: one stored calendar, Jalali as input and display (2026-11-25)
+
+- **Storage stays Gregorian.** One scale for sorting, matching, ages and the quilt. No per-date calendar column.
+- **Agents send `calendar: "jalali"`** on a person, relationship or change, with the date exactly as the user gave it. The
+  server converts before validating (`crates/review/src/calendar.rs`), removes the key, and returns `date_conversions`
+  (given, stored, approximate, note). Only `gregorian` and `jalali` are accepted; anything else or an impossible date
+  (month 13, Esfand 30 in a non-leap year) is a field error. In a change, `calendar` applies to `to`, not `from`.
+- **Partial dates.** A Jalali year or month does not fit one Gregorian year or month, so it is stored at the same
+  precision using its middle, with qualifier `about` (people), plus a note and an appended `agent_note` giving what the
+  agent sent. Full dates are exact.
+- **Algorithm.** `crates/store/src/jalali.rs`, a port of the `jalaali-js` leap table (valid for years -61 to 3177 AP). Tests
+  compare every leap flag and about 3,900 sample days with that library and round-trip every day from 1700 to 2100.
+- **Display.** Setting "Show dates in" (Gregorian or Jalali) changes only `fmtDate`, using the browser's Persian calendar.
+- **Not done:** typing dates in Jalali inside the app (entry is still Gregorian); Hijri (lunar) calendar, which depends on
+  moon sighting and would need a "may be a day off" qualifier; showing the original text of partial dates in the UI.

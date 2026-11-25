@@ -17,6 +17,7 @@ pub mod error;
 pub mod graph;
 pub mod history;
 pub mod ids;
+pub mod jalali;
 pub mod links;
 pub mod model;
 pub mod names;

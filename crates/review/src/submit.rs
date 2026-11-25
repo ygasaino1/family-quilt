@@ -27,6 +27,9 @@ pub struct SubmitResult {
     pub relationships: Vec<IndexId>,
     pub changes: Vec<IndexId>,
     pub warnings: Vec<Warning>,
+    /// Dates the server converted from another calendar (`calendar` on an object), with what it stored.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub date_conversions: Vec<crate::calendar::Conversion>,
     /// The proposal this one took the place of, if `replaces` was used.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub replaced: Option<String>,
@@ -179,6 +182,8 @@ pub fn submit(store: &mut Store, agent: &str, body: &Value) -> Result<SubmitResu
     let agent = clean_agent_name(agent);
     let created_by = format!("agent:{agent}");
     let mut errs = Errs(vec![]);
+    let (normalized, date_conversions) = crate::calendar::normalize(body).map_err(ReviewError::Invalid)?;
+    let body = &normalized;
     let Some(top) = as_obj(body, "$", &mut errs) else {
         return Err(ReviewError::Invalid(errs.0));
     };
@@ -658,6 +663,7 @@ pub fn submit(store: &mut Store, agent: &str, body: &Value) -> Result<SubmitResu
                 relationships,
                 changes,
                 warnings,
+                date_conversions,
                 replaced: replaces,
                 note: "Nothing is final until the user approves this proposal in the app. Do not assume any of it was applied.",
             })

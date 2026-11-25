@@ -51,6 +51,8 @@ export async function open({ agent = false } = {}) {
     pick('set-theme', t('settings.theme'), 'theme', [['auto', t('settings.theme_auto')], ['light', t('settings.theme_light')], ['dark', t('settings.theme_dark')]]),
     pick('set-scale', t('settings.text_size'), 'scale', [['1', t('settings.size_normal')], ['1.15', t('settings.size_large')], ['1.3', t('settings.size_larger')], ['1.5', t('settings.size_largest')]]),
     pick('set-lang', t('settings.language'), 'lang', [['en', 'English'], ['qps', 'Pseudo (testing)']]),
+    pick('set-calendar', t('settings.calendar'), 'calendar', [['gregorian', t('settings.calendar_gregorian')], ['jalali', t('settings.calendar_jalali')]]),
+    h('p', { class: 'muted' }, t('settings.calendar_hint')),
     h('div', { class: 'field' }, h('label', {}, privacy, ' ', t('settings.privacy')), h('span', { class: 'muted' }, t('settings.privacy_hint'))),
     h('div', { class: 'field' }, h('label', {}, live, ' ', t('settings.live')), h('span', { class: 'muted' }, t('settings.live_hint'))),
     h('div', { class: 'row' }, h('button', { class: 'btn', id: 'set-backup', onclick: () => backup() }, t('settings.backup')), h('span', { class: 'muted' }, t('settings.backup_hint'))),

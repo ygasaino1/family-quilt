@@ -656,6 +656,26 @@ try {
     assert.match(dl2.suggestedFilename(), /\.svg$/);
   });
 
+  await check('calendar setting: stored Gregorian dates read in Jalali and back', async () => {
+    const p3 = await ctx.newPage();
+    await p3.goto(base + '/');
+    await p3.waitForSelector('html[data-ready="1"]');
+    const read = (cal) => p3.evaluate(async (c) => {
+      localStorage.setItem('fq.calendar', c);
+      const m = await import('/js/i18n.js');
+      return [m.fmtDate('1950-08-03', 'exact'), m.fmtDate('1950', 'about'), m.fmtDate('1950-08', 'exact')];
+    }, cal);
+    const g = await read('gregorian');
+    assert.match(g[0], /1950/);
+    const j = await read('jalali');
+    assert.match(j[0], /1329/, j[0]);
+    assert.match(j[0], /12/, j[0]);
+    assert.match(j[1], /1329/, j[1]);
+    assert.match(j[2], /1329/, j[2]);
+    await read('gregorian');
+    await p3.close();
+  });
+
   await check('no missing translation keys and no console errors', async () => {
     assert.deepEqual(warnings, []);
     assert.deepEqual(errors, []);

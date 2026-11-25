@@ -18,6 +18,20 @@ until the user tells you it was approved.
    `no_parents`, `no_children`, `no_partners` (loose ends), `created_by_proposal`, `offset`, `limit` (default 50,
    max 500). Follow `next_offset` until it is null.
 
+## Dates and calendars
+
+Dates are `YYYY`, `YYYY-MM` or `YYYY-MM-DD` (digits, zero padded) and Gregorian by default. If the user gives a date in
+another calendar, add `"calendar": "jalali"` to that person, relationship or change and send the date **exactly as the
+user gave it**. Do not convert it yourself: the server converts it exactly and returns `date_conversions` (what you
+sent and what was stored). Supported calendars: `gregorian` and `jalali` (Solar Hijri). Any other value is an error.
+
+* If you do not know which calendar the user means, ask them. A year like 1329 is almost certainly Jalali and 1950
+  Gregorian, but do not guess for years such as 1990 that exist in neither.
+* A Jalali month or year does not line up with a Gregorian one (Jalali 1329 runs from March 1950 to March 1951), so it is
+  stored as the closest Gregorian year or month, marked `about`, and noted. Give a full date whenever the user has one.
+* In an edit, `calendar` applies to the new value (`to`); `from` is always what you read from the tree.
+* The date you read back from the tree is always Gregorian.
+
 ## Names
 
 Give `given_name` and `family_name` when the name splits that way. When it does not (one word, patronymics, a name in
