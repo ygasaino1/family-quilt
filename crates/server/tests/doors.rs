@@ -161,6 +161,15 @@ async fn agent_proposal_to_ui_approval_round_trip() {
     let (st, r) = agent(p, "POST", "/agent/v1/proposals", "my bot", Some(&body.to_string()));
     assert_eq!(st, 201, "{r}");
     let pid = r["proposal_id"].as_str().unwrap().to_string();
+    // A misspelt or unknown query parameter is refused, and the sex filter takes words and codes.
+    let (st, _) = agent(p, "GET", "/agent/v1/directory?sexx=F", "my bot", None);
+    assert_eq!(st, 400);
+    let (st, bad) = agent(p, "GET", "/agent/v1/directory?sex=banana", "my bot", None);
+    assert!(st == 400 || st == 422, "{st} {bad}");
+    let (_, a) = agent(p, "GET", "/agent/v1/directory?sex=unknown&fields=id,name&format=columns", "my bot", None);
+    let (_, b) = agent(p, "GET", "/agent/v1/directory?sex=U&fields=id,name&format=columns", "my bot", None);
+    assert_eq!((&a["total"], &a["columns"]), (&b["total"], &b["columns"]));
+    assert_eq!(agent(p, "GET", "/agent/v1/guide/reading", "my bot", None).0, 200);
     // The UI can ask the server to convert a Jalali date it is about to save.
     let (st, c) = ui(p, "POST", "/api/calendar/convert", Some(r#"{"calendar":"jalali","date":"1329-05-12"}"#));
     assert_eq!((st, c["stored"].as_str(), c["approximate"].as_bool()), (200, Some("1950-08-03"), Some(false)));
@@ -289,6 +298,30 @@ async fn mcp_has_exactly_nine_tools_and_no_way_to_approve_edit_or_delete() {
     let lp: Value = serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     assert!(lp["total"].as_u64().unwrap() >= 1 && lp["people"].as_array().unwrap().len() == 1);
     assert_eq!(call(44, "list_people", json!({"status": "nope"}))["result"]["isError"], true);
+    // The query vocabulary is checked, never silently empty: words and codes agree, junk is an error with the allowed values.
+    let tot = |sex: &str| -> u64 {
+        let r = call(50, "list_people", json!({"status": "all", "sex": sex}));
+        assert_ne!(r["result"]["isError"], true, "{sex}: {r}");
+        let v: Value = serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(v["filters"]["sex"], family_store::Sex::parse(&sex.chars().next().unwrap().to_uppercase().to_string()).unwrap().as_str(), "{v}");
+        v["total"].as_u64().unwrap()
+    };
+    assert_eq!((tot("M"), tot("m")), (tot("male"), tot("Male")));
+    assert_eq!(tot("F"), tot("female"));
+    let r = call(51, "list_people", json!({"sex": "banana"}));
+    assert_eq!(r["result"]["isError"], true);
+    assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("male, female, other, unknown"));
+    let r = call(52, "list_people", json!({"sexx": "F"}));
+    assert_eq!(r["result"]["isError"], true);
+    assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("Unknown argument"));
+    let r = call(53, "list_people", json!({"status": "all", "fields": ["id", "name"], "format": "columns", "limit": 2}));
+    let v: Value = serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(v["columns"], json!(["id", "name"]));
+    assert!(v["rows"][0].as_array().unwrap().len() == 2 && v.get("people").is_none() && !v["tree_version"].as_str().unwrap().is_empty(), "{v}");
+    let r = call(54, "list_people", json!({"status": "all", "group_by": "sex"}));
+    let v: Value = serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(v["groups"].as_object().unwrap().values().map(|x| x.as_u64().unwrap()).sum::<u64>(), v["total"].as_u64().unwrap());
+    assert_eq!(call(55, "list_people", json!({"fields": ["nope"]}))["result"]["isError"], true);
     // Another agent's proposal is not readable.
     assert_eq!(call(45, "get_proposal", json!({"id": "does-not-exist"}))["result"]["isError"], true);
     let (_, status) = ui(p, "GET", "/api/status", None);

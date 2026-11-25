@@ -261,11 +261,11 @@ pub fn submit(store: &mut Store, agent: &str, body: &Value) -> Result<SubmitResu
             Some(r) if !refs.insert(r.clone()) => errs.add(format!("{path}.ref"), "duplicate_ref", format!("ref '{r}' is used twice")),
             _ => {}
         }
-        let sex = match opt_str(o, "sex", &path, 1, &mut errs) {
-            Some(s) => match Sex::parse(&s) {
+        let sex = match opt_str(o, "sex", &path, 7, &mut errs) {
+            Some(s) => match crate::query::parse_sex(&s) {
                 Ok(s) => s,
                 Err(e) => {
-                    errs.add(format!("{path}.sex"), "invalid_value", e.to_string());
+                    errs.add(format!("{path}.sex"), "invalid_value", e);
                     Sex::Unknown
                 }
             },
@@ -686,7 +686,8 @@ pub fn fingerprints(people: &[Value], rels: &[Value], changes: &[Value]) -> Vec<
         let name =
             if p.get("full_name").is_some_and(|f| !f.is_null()) && p.get("given_name").is_none() { low(&p["full_name"]) } else { format!("{} {}", low(&p["given_name"]), low(&p["family_name"])) };
         let year: String = low(&p["birth_date"]).chars().take(4).collect();
-        let fp = format!("p|{}|{}|{}", name.split_whitespace().collect::<Vec<_>>().join(" "), low(&p["sex"]), year);
+        let sex = p["sex"].as_str().and_then(|s| crate::query::parse_sex(s).ok()).map_or_else(|| low(&p["sex"]), |s| s.as_str().to_string());
+        let fp = format!("p|{}|{}|{}", name.split_whitespace().collect::<Vec<_>>().join(" "), sex, year);
         if let Some(r) = p.get("ref").and_then(Value::as_str) {
             by_ref.insert(r.to_string(), fp.clone());
         }

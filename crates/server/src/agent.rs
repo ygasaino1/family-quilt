@@ -16,6 +16,7 @@ pub fn routes() -> Router<Shared> {
         .route("/people", get(people))
         .route("/people/{id}", get(person))
         .route("/directory", get(directory))
+        .route("/guide/reading", get(guide_reading))
         .route("/proposals/{id}", get(proposal))
         .route("/relationship", get(relationship))
         .route("/graph", get(graph))
@@ -37,7 +38,12 @@ async fn guide(State(st): State<Shared>, Extension(a): Extension<AgentName>) -> 
     ([(header::CONTENT_TYPE, "text/markdown; charset=utf-8")], family_review::guide::GUIDE).into_response()
 }
 
+async fn guide_reading() -> Response {
+    ([(header::CONTENT_TYPE, "text/markdown; charset=utf-8")], family_review::guide::GUIDE_READING).into_response()
+}
+
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PeopleQ {
     q: Option<String>,
     limit: Option<usize>,
@@ -50,6 +56,7 @@ async fn people(State(st): State<Shared>, Extension(a): Extension<AgentName>, Qu
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DirQ {
     status: Option<String>,
     name: Option<String>,
@@ -60,6 +67,9 @@ struct DirQ {
     created_by_proposal: Option<String>,
     offset: Option<usize>,
     limit: Option<usize>,
+    fields: Option<String>,
+    format: Option<String>,
+    group_by: Option<String>,
 }
 
 async fn directory(State(st): State<Shared>, Extension(a): Extension<AgentName>, Query(q): Query<DirQ>) -> Result<Json<Value>, ApiError> {
@@ -74,8 +84,19 @@ async fn directory(State(st): State<Shared>, Extension(a): Extension<AgentName>,
         created_by_proposal: q.created_by_proposal,
         offset: q.offset.unwrap_or(0),
         limit: q.limit.unwrap_or(0),
+        fields: q.fields.map(|f| f.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()),
+        columnar: match q.format.as_deref() {
+            None | Some("json") => false,
+            Some("columns") => true,
+            Some(o) => return Err(ApiError::bad_request(&format!("format '{o}' is not supported: use json or columns"))),
+        },
+        group_by: q.group_by,
     };
-    ops::list_people(&st, &o).map(Json)
+    let r = ops::list_people(&st, &o)?;
+    if r["total"] == 0 {
+        st.log_activity(name(&a), &format!("list_people matched nobody ({})", r["filters"]));
+    }
+    Ok(Json(r))
 }
 
 async fn proposal(State(st): State<Shared>, Extension(a): Extension<AgentName>, Path(id): Path<String>) -> Result<Json<Value>, ApiError> {
@@ -84,6 +105,7 @@ async fn proposal(State(st): State<Shared>, Extension(a): Extension<AgentName>, 
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct HistQ {
     history: Option<String>,
 }
@@ -94,6 +116,7 @@ async fn person(State(st): State<Shared>, Extension(a): Extension<AgentName>, Pa
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RelQ {
     a: Option<String>,
     b: Option<String>,
@@ -107,6 +130,7 @@ async fn relationship(State(st): State<Shared>, Extension(ag): Extension<AgentNa
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct GraphQ {
     focus: Option<String>,
     up: Option<u32>,

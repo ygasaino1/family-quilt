@@ -20,7 +20,7 @@ pub fn search_people(st: &Shared, q: &str, limit: usize, pending: bool) -> Resul
     let store = lock(st);
     let people = query::search_cards(&store, q, limit, pending)?;
     let rejected = previously_rejected(&store, q);
-    Ok(json!({ "people": people, "includes_pending": pending, "previously_rejected": rejected }))
+    Ok(json!({ "people": people, "includes_pending": pending, "previously_rejected": rejected, "tree_version": query::tree_version(&store)? }))
 }
 
 /// Page through people with filters (the search needs a name; this does not).

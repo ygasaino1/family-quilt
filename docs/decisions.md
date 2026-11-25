@@ -330,3 +330,19 @@ Prompted by an agent's review of the MCP design after a large import.
   Jalali month or year becomes `about`). `web/js/dates.js` does the showing, the server does the converting.
 - **Not done:** Hijri (lunar) calendar, which depends on
   moon sighting and would need a "may be a day off" qualifier; showing the original text of partial dates in the UI.
+
+## Agent review of list_people: fixes (2026-11-25)
+
+An agent's review found `sex` silently matched nobody: the filter lowercased its input but the store keeps `M/F/X/U`.
+Fixed and tested with every vocabulary. Also from the review:
+
+- **Never silently empty.** Bad `sex`, `status`, `fields`, `group_by` or `format` values are errors that list the
+  allowed values; unknown query parameters (HTTP) and unknown tool arguments (MCP) are errors; results echo `filters`.
+  Proposals accept `male/female/other/unknown` as well as the codes.
+- **Enums in the tool schema** for the query filters and for `sex`, qualifiers, link `type`, `kind` and `subtype` in
+  `create_proposal`.
+- **Small calls:** `fields` projection, `format=columns`, `group_by` counts, limit up to 2000, compact JSON in MCP results
+  (was pretty-printed), `tree_version` on list and search results (id of the newest revision).
+- **Short reading guide** at `family-quilt://guide/reading` and `/agent/v1/guide/reading`.
+- Empty `list_people` results are written to the activity log with the filters.
+- **Not done:** CSV output (columns covers it), ETag/`If-None-Match`, size hints, a separate stats tool (`group_by`).

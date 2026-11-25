@@ -18,6 +18,7 @@ use serde_json::{json, Value};
 
 pub const SUPPORTED_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26"];
 pub const GUIDE_URI: &str = "family-quilt://guide";
+pub const GUIDE_READ_URI: &str = "family-quilt://guide/reading";
 
 pub fn routes() -> Router<Shared> {
     Router::new().route("/mcp", post(handle).get(method_not_allowed).delete(method_not_allowed)).layer(axum::extract::DefaultBodyLimit::max(1_000_000))
@@ -44,14 +45,18 @@ pub fn tool_definitions() -> Value {
       },
       {
         "name": "list_people",
-        "description": "Page through people without needing a name. Filters combine: `status` verified (default), pending or all; `name` substring; `sex`; `no_parents`, `no_children`, `no_partners` (find loose ends); `created_by_proposal` (one proposal's people). Returns cards plus `total` and `next_offset` (null at the end).",
+        "description": "Page through people without needing a name. Filters combine (AND): `status`, `name` substring, `sex`, `no_parents`/`no_children`/`no_partners` (loose ends), `created_by_proposal`. Wrong filter values are errors, never silently empty; the result echoes the `filters` applied and `tree_version`. To keep it small: `fields` picks card fields (name, sex, birth_year are cheap; parents, partners, children_count, proposal_id cost more), `format: columns` returns {columns, rows} instead of one object per person, and `group_by` (sex or status) returns only counts. `limit` up to 2000 (default 50); follow `next_offset` until null.",
         "inputSchema": {"type": "object", "properties": {
             "status": {"type": "string", "enum": ["verified", "pending", "all"]},
-            "name": {"type": "string"}, "sex": {"type": "string"},
+            "name": {"type": "string"},
+            "sex": {"type": "string", "enum": ["male", "female", "other", "unknown"], "description": "M, F, X, U also work"},
+            "fields": {"type": "array", "items": {"type": "string", "enum": ["id", "name", "sex", "birth_year", "death_year", "is_living", "status", "proposal_id", "parents", "partners", "children_count"]}},
+            "format": {"type": "string", "enum": ["json", "columns"], "description": "columns: {columns, rows}, far smaller for long lists"},
+            "group_by": {"type": "string", "enum": ["sex", "status"], "description": "Return counts per value, no people"},
             "no_parents": {"type": "boolean"}, "no_children": {"type": "boolean"}, "no_partners": {"type": "boolean"},
             "created_by_proposal": {"type": "string"},
             "offset": {"type": "integer", "minimum": 0},
-            "limit": {"type": "integer", "minimum": 1, "maximum": 500, "description": "Default 50"}
+            "limit": {"type": "integer", "minimum": 1, "maximum": 2000, "description": "Default 50"}
         }},
         "annotations": {"readOnlyHint": true}
       },
@@ -90,8 +95,8 @@ pub fn tool_definitions() -> Value {
         "inputSchema": {"type": "object", "properties": {
             "summary": {"type": "string", "description": "What the user asked for, in one line"},
             "source_text": {"type": "string", "description": "The user's own words"},
-            "people": {"type": "array", "items": {"type": "object", "properties": {"calendar": {"type": "string", "enum": ["gregorian", "jalali"], "description": "Calendar of this person's dates (default gregorian). Send Jalali dates as given; the server converts."}}}},
-            "relationships": {"type": "array", "items": {"type": "object", "properties": {"calendar": {"type": "string", "enum": ["gregorian", "jalali"], "description": "Calendar of start_date and end_date (default gregorian)"}}}},
+            "people": {"type": "array", "items": {"type": "object", "properties": {"sex": {"type": "string", "enum": ["M", "F", "X", "U"], "description": "male, female, other, unknown also work"}, "birth_qualifier": {"type": "string", "enum": ["exact", "about", "before", "after"]}, "death_qualifier": {"type": "string", "enum": ["exact", "about", "before", "after"]}, "calendar": {"type": "string", "enum": ["gregorian", "jalali"], "description": "Calendar of this person's dates (default gregorian). Send Jalali dates as given; the server converts."}}}},
+            "relationships": {"type": "array", "items": {"type": "object", "properties": {"type": {"type": "string", "enum": ["parent_child", "partnership"]}, "kind": {"type": "string", "enum": ["birth", "adopted", "foster", "step", "guardian", "sealing", "unknown"], "description": "parent_child only"}, "subtype": {"type": "string", "enum": ["married", "unmarried", "divorced", "ended", "unknown"], "description": "partnership only"}, "calendar": {"type": "string", "enum": ["gregorian", "jalali"], "description": "Calendar of start_date and end_date (default gregorian)"}}}},
             "changes": {"type": "array", "items": {"type": "object", "properties": {"calendar": {"type": "string", "enum": ["gregorian", "jalali"], "description": "Calendar of the new (`to`) date values; `from` values are always as you read them"}}}},
             "replaces": {"type": "string", "description": "id of one of YOUR OWN pending proposals that this one replaces: the old one is withdrawn and this takes its place (it must not refer to people the old one added)"},
             "acknowledge_rejected": {"type": "array", "items": {"type": "string"}, "description": "ids of rejected proposals this one repeats on purpose after changing it because of the user's reason"}
@@ -111,11 +116,24 @@ pub fn tool_names() -> Vec<String> {
 }
 
 fn text_result(v: &Value, is_error: bool) -> Value {
-    json!({"content": [{"type": "text", "text": serde_json::to_string_pretty(v).unwrap_or_default()}], "isError": is_error})
+    json!({"content": [{"type": "text", "text": serde_json::to_string(v).unwrap_or_default()}], "isError": is_error})
 }
 
 fn tool_error(e: ApiError) -> Value {
     text_result(&e.body(), true)
+}
+
+/// An argument the tool does not have is an error, not something to ignore: a typo must not become an empty result.
+fn unknown_arguments(name: &str, args: &Value) -> Option<String> {
+    let defs = tool_definitions();
+    let props = defs.as_array()?.iter().find(|t| t["name"] == name)?["inputSchema"]["properties"].as_object()?.clone();
+    let extra: Vec<&str> = args.as_object()?.keys().map(String::as_str).filter(|k| !props.contains_key(*k)).collect();
+    if extra.is_empty() {
+        return None;
+    }
+    let mut allowed: Vec<&str> = props.keys().map(String::as_str).collect();
+    allowed.sort_unstable();
+    Some(format!("Unknown argument(s) for {name}: {}. Allowed: {}", extra.join(", "), allowed.join(", ")))
 }
 
 pub fn call_tool(st: &Shared, agent: &str, name: &str, args: &Value) -> Value {
@@ -123,6 +141,9 @@ pub fn call_tool(st: &Shared, agent: &str, name: &str, args: &Value) -> Value {
     let b = |k: &str| args.get(k).and_then(Value::as_bool).unwrap_or(false);
     let n = |k: &str, d: u64| args.get(k).and_then(Value::as_u64).unwrap_or(d);
     st.log_activity(agent, &format!("MCP {name}"));
+    if let Some(bad) = unknown_arguments(name, args) {
+        return text_result(&json!({"error": {"code": "unknown_argument", "message": bad}}), true);
+    }
     let r = match name {
         "search_people" => ops::search_people(st, &s("q"), n("limit", 50) as usize, b("include_pending")),
         "list_people" => {
@@ -136,6 +157,13 @@ pub fn call_tool(st: &Shared, agent: &str, name: &str, args: &Value) -> Value {
                 created_by_proposal: Some(s("created_by_proposal")).filter(|x| !x.is_empty()),
                 offset: n("offset", 0) as usize,
                 limit: n("limit", 0) as usize,
+                fields: args.get("fields").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()),
+                columnar: match args.get("format").and_then(Value::as_str) {
+                    None | Some("json") => false,
+                    Some("columns") => true,
+                    Some(o) => return text_result(&json!({"error": {"code": "bad_request", "message": format!("format '{o}' is not supported: use json or columns")}}), true),
+                },
+                group_by: Some(s("group_by")).filter(|x| !x.is_empty()),
             };
             ops::list_people(st, &o)
         }
@@ -170,12 +198,16 @@ pub fn static_method(method: &str, params: &Value) -> Option<Value> {
         "initialize" => Some(initialize_result(params["protocolVersion"].as_str())),
         "ping" => Some(json!({})),
         "tools/list" => Some(json!({"tools": tool_definitions()})),
-        "resources/list" => Some(json!({"resources": [{"uri": GUIDE_URI, "name": "Agent guide", "description": "How to search, link people and propose changes", "mimeType": "text/markdown"}]})),
+        "resources/list" => Some(json!({"resources": [
+            {"uri": GUIDE_READ_URI, "name": "Reading guide (short)", "description": "Only for read-only work: search, list, filter, count. About 30 lines.", "mimeType": "text/markdown"},
+            {"uri": GUIDE_URI, "name": "Agent guide (full)", "description": "How to search, link people and propose changes", "mimeType": "text/markdown"}]})),
         "resources/templates/list" => Some(json!({"resourceTemplates": []})),
         "prompts/list" => Some(json!({"prompts": []})),
         "resources/read" => {
             if params["uri"].as_str() == Some(GUIDE_URI) {
                 Some(json!({"contents": [{"uri": GUIDE_URI, "mimeType": "text/markdown", "text": family_review::guide::GUIDE}]}))
+            } else if params["uri"].as_str() == Some(GUIDE_READ_URI) {
+                Some(json!({"contents": [{"uri": GUIDE_READ_URI, "mimeType": "text/markdown", "text": family_review::guide::GUIDE_READING}]}))
             } else {
                 None
             }
@@ -242,7 +274,7 @@ async fn handle(State(st): State<Shared>, Extension(agent): Extension<AgentName>
     } else if let Some(v) = static_method(method, params) {
         Ok(v)
     } else if method == "resources/read" {
-        Err((-32002, format!("Unknown resource. Available: {GUIDE_URI}")))
+        Err((-32002, format!("Unknown resource. Available: {GUIDE_URI}, {GUIDE_READ_URI}")))
     } else {
         Err((-32601, format!("Method not found: {method}")))
     };

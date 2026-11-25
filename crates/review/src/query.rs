@@ -46,6 +46,18 @@ pub fn search_cards(store: &Store, text: &str, limit: usize, include_pending: bo
     search(store, text, limit, include_pending)?.iter().map(|s| card(store, &s.id)).collect()
 }
 
+/// `male`, `female`, `other`, `unknown` or the stored codes `M`, `F`, `X`, `U` (any case) -> the stored value.
+pub fn parse_sex(s: &str) -> std::result::Result<family_store::Sex, String> {
+    use family_store::Sex;
+    match s.trim().to_lowercase().as_str() {
+        "m" | "male" => Ok(Sex::Male),
+        "f" | "female" => Ok(Sex::Female),
+        "x" | "other" => Ok(Sex::Other),
+        "u" | "unknown" => Ok(Sex::Unknown),
+        _ => Err(format!("'{s}' is not a sex: use one of male, female, other, unknown (or M, F, X, U)")),
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct ListOpts {
     /// `verified` (default), `pending` or `all`.
@@ -58,16 +70,48 @@ pub struct ListOpts {
     pub created_by_proposal: Option<String>,
     pub offset: usize,
     pub limit: usize,
+    /// Which card fields to return (default: all). Cheap ones skip the relative lookups.
+    pub fields: Option<Vec<String>>,
+    /// `columns` returns `{columns, rows}` instead of one object per person.
+    pub columnar: bool,
+    /// `sex` or `status`: return counts per value instead of people.
+    pub group_by: Option<String>,
 }
 
 pub const LIST_DEFAULT: usize = 50;
-pub const LIST_MAX: usize = 500;
+pub const LIST_MAX: usize = 2000;
+pub const CARD_FIELDS: &[&str] = &["id", "name", "sex", "birth_year", "death_year", "is_living", "status", "proposal_id", "parents", "partners", "children_count"];
 
-/// Page through people. Filters combine with AND. Returns cards plus paging info.
+fn bad(field: &str, msg: String) -> crate::ReviewError {
+    StoreError::invalid(field, msg).into()
+}
+
+/// Page through people. Filters combine with AND. Returns cards plus paging info, the filters that were
+/// applied (so an empty result is never ambiguous), and `tree_version`. Bad filter values are errors.
 pub fn list_people(store: &Store, o: &ListOpts) -> Result<Value> {
     let status = if o.status.is_empty() { "verified" } else { o.status.as_str() };
     if !["verified", "pending", "all"].contains(&status) {
-        return Err(StoreError::invalid("status", "use verified, pending or all").into());
+        return Err(bad("status", format!("'{status}' is not a status: use one of verified, pending, all")));
+    }
+    let sex_filter = match o.sex.as_deref().filter(|s| !s.is_empty()) {
+        Some(s) => Some(parse_sex(s).map_err(|m| bad("sex", m))?),
+        None => None,
+    };
+    let fields: Option<Vec<&str>> = match &o.fields {
+        Some(f) if !f.is_empty() => {
+            for x in f {
+                if !CARD_FIELDS.contains(&x.as_str()) {
+                    return Err(bad("fields", format!("'{x}' is not a field: use any of {}", CARD_FIELDS.join(", "))));
+                }
+            }
+            Some(f.iter().map(String::as_str).collect())
+        }
+        _ => None,
+    };
+    if let Some(g) = o.group_by.as_deref() {
+        if !["sex", "status"].contains(&g) {
+            return Err(bad("group_by", format!("'{g}' cannot be grouped: use sex or status")));
+        }
     }
     let g = store.load_graph(&CTX, GraphFilter { include_pending: status != "verified" })?;
     let n = g.people.len();
@@ -90,8 +134,7 @@ pub fn list_people(store: &Store, o: &ListOpts) -> Result<Value> {
         None => None,
     };
     let needle = o.name.as_deref().map(family_store::names::search_key).filter(|k| !k.is_empty());
-    let sex = o.sex.as_deref().map(|s| s.to_lowercase());
-    let mut ids: Vec<&str> = vec![];
+    let mut hits: Vec<usize> = vec![];
     for (i, p) in g.people.iter().enumerate() {
         if status == "pending" && p.status != Status::Pending {
             continue;
@@ -99,29 +142,62 @@ pub fn list_people(store: &Store, o: &ListOpts) -> Result<Value> {
         if o.no_parents && has_parent[i] || o.no_children && has_child[i] || o.no_partners && has_partner[i] {
             continue;
         }
-        if let Some(s) = &sex {
-            if p.sex.as_str() != s {
-                continue;
-            }
+        if sex_filter.is_some_and(|s| p.sex != s) {
+            continue;
         }
-        if let Some(set) = &of_proposal {
-            if !set.contains(&p.id) {
-                continue;
-            }
+        if of_proposal.as_ref().is_some_and(|set| !set.contains(&p.id)) {
+            continue;
         }
-        if let Some(k) = &needle {
-            if !family_store::names::search_key(&p.display_name).contains(k.as_str()) {
-                continue;
-            }
+        if needle.as_ref().is_some_and(|k| !family_store::names::search_key(&p.display_name).contains(k.as_str())) {
+            continue;
         }
-        ids.push(&p.id);
+        hits.push(i);
     }
-    ids.sort();
-    let total = ids.len();
+    hits.sort_by(|&a, &b| g.people[a].id.cmp(&g.people[b].id));
+    let total = hits.len();
+    let applied = json!({
+        "status": status, "name": o.name, "sex": sex_filter.map(|s| s.as_str()),
+        "no_parents": o.no_parents, "no_children": o.no_children, "no_partners": o.no_partners,
+        "created_by_proposal": o.created_by_proposal,
+    });
+    let version = tree_version(store)?;
+    if let Some(by) = o.group_by.as_deref() {
+        let mut groups = std::collections::BTreeMap::<String, usize>::new();
+        for &i in &hits {
+            let key = if by == "sex" { g.people[i].sex.as_str().to_string() } else { g.people[i].status.as_str().to_string() };
+            *groups.entry(key).or_default() += 1;
+        }
+        return Ok(json!({"group_by": by, "groups": groups, "total": total, "filters": applied, "tree_version": version}));
+    }
     let limit = if o.limit == 0 { LIST_DEFAULT } else { o.limit.min(LIST_MAX) };
-    let page: Vec<Value> = ids.iter().skip(o.offset).take(limit).map(|id| card(store, id)).collect::<Result<_>>()?;
+    let wanted: Vec<&str> = fields.clone().unwrap_or_else(|| CARD_FIELDS.to_vec());
+    let needs_card = wanted.iter().any(|f| ["proposal_id", "parents", "partners", "children_count"].contains(f));
+    let mut page: Vec<Value> = vec![];
+    for &i in hits.iter().skip(o.offset).take(limit) {
+        let p = &g.people[i];
+        let full = if needs_card {
+            card(store, &p.id)?
+        } else {
+            json!({"id": p.id, "name": p.display_name, "sex": p.sex, "is_living": p.is_living, "birth_year": year_of(&p.birth), "death_year": year_of(&p.death), "status": p.status})
+        };
+        page.push(full);
+    }
     let next = o.offset + page.len();
-    Ok(json!({"people": page, "total": total, "offset": o.offset, "next_offset": if next < total { json!(next) } else { Value::Null }, "status": status}))
+    let mut out = json!({"total": total, "offset": o.offset, "next_offset": if next < total { json!(next) } else { Value::Null }, "filters": applied, "tree_version": version});
+    if o.columnar {
+        let rows: Vec<Value> = page.iter().map(|c| Value::Array(wanted.iter().map(|f| c[*f].clone()).collect())).collect();
+        out["columns"] = json!(wanted);
+        out["rows"] = Value::Array(rows);
+    } else {
+        let projected: Vec<Value> = page.iter().map(|c| if fields.is_some() { Value::Object(wanted.iter().map(|f| (f.to_string(), c[*f].clone())).collect()) } else { c.clone() }).collect();
+        out["people"] = Value::Array(projected);
+    }
+    Ok(out)
+}
+
+/// Changes whenever anything in the tree changes (the id of the newest revision), so an agent can tell a cached read is stale.
+pub fn tree_version(store: &Store) -> Result<String> {
+    Ok(store.recent_revisions(&CTX, None, 1)?.first().map(|r| r.id.clone()).unwrap_or_default())
 }
 
 #[derive(Debug, Serialize)]

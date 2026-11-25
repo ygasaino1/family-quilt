@@ -12,11 +12,15 @@ until the user tells you it was approved.
 3. **Propose** with `create_proposal` (`POST /agent/v1/proposals`). One proposal = one request from the user, reviewed as a whole.
 4. Check the result with `list_my_proposals`. Statuses: `pending`, `approved`, `rejected`, `withdrawn`.
    `get_proposal` (`GET /agent/v1/proposals/{id}`) shows one of your proposals in full, with the ids of the people it added.
-5. **Look around.** `search_people` returns cards (birth year, parents, partners, number of children and, for people
+5. **Look around.** (For read-only work the short guide `family-quilt://guide/reading`, or `GET /agent/v1/guide/reading`, is enough.) `search_people` returns cards (birth year, parents, partners, number of children and, for people
    still waiting, the `proposal_id`) so you can tell same-named people apart. `list_people`
    (`GET /agent/v1/directory`) pages through everyone without a name: `status` (verified, pending, all), `name`, `sex`,
    `no_parents`, `no_children`, `no_partners` (loose ends), `created_by_proposal`, `offset`, `limit` (default 50,
-   max 500). Follow `next_offset` until it is null.
+   max 2000). Follow `next_offset` until it is null. Keep it small: `fields` (`id,name,sex,birth_year,...`),
+   `format=columns` (`{columns, rows}`) and `group_by=sex` (or `status`) for counts only. A wrong value (for example
+   `sex=banana`) or an unknown parameter is an error that lists what is allowed, never a silent empty list; the result
+   echoes the `filters` it applied and a `tree_version` that changes when the tree does.
+   `sex` is `male`, `female`, `other` or `unknown` (the codes `M`, `F`, `X`, `U` work too; people in results show codes).
 
 ## Dates and calendars
 
