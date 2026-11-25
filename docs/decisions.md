@@ -346,3 +346,11 @@ Fixed and tested with every vocabulary. Also from the review:
 - **Short reading guide** at `family-quilt://guide/reading` and `/agent/v1/guide/reading`.
 - Empty `list_people` results are written to the activity log with the filters.
 - **Not done:** CSV output (columns covers it), ETag/`If-None-Match`, size hints, a separate stats tool (`group_by`).
+
+## Cursor paging replaces offsets (2026-11-26)
+
+`list_people` takes `after` (the previous `next_cursor`) instead of `offset`; offsets are gone (development phase, no old
+callers to keep). A cursor is `<tree_version of the first page>~<last id>`, so a stateless agent only needs the previous
+answer. People are sorted by id, so a change earlier in the list cannot shift what comes next. Later pages carry
+`changed_since_start` (the tree changed since the first page), which the agent cannot work out alone. Results also show
+`remaining_after_this_page`. Not built: `if_version` ("unchanged" replies), ETag headers.

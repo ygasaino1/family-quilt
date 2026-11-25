@@ -293,7 +293,7 @@ async fn mcp_has_exactly_nine_tools_and_no_way_to_approve_edit_or_delete() {
     assert_eq!(gp["relationships"].as_array().unwrap().len(), 1);
     let r = call(42, "list_people", json!({"status": "pending", "created_by_proposal": pid, "limit": 1}));
     let lp: Value = serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!((lp["total"].as_u64(), lp["next_offset"].is_null()), (Some(1), true));
+    assert_eq!((lp["total"].as_u64(), lp["next_cursor"].is_null()), (Some(1), true));
     let r = call(43, "list_people", json!({"status": "all", "no_parents": true, "limit": 1}));
     let lp: Value = serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     assert!(lp["total"].as_u64().unwrap() >= 1 && lp["people"].as_array().unwrap().len() == 1);

@@ -74,3 +74,64 @@ fn projection_columns_groups_and_version() {
     assert!(list_people(&s, &opts(|o| o.group_by = Some("birth".into()))).is_err());
     let _ = a;
 }
+
+#[test]
+fn cursor_paging_is_stateless_complete_and_notices_changes() {
+    let mut s = Store::open_in_memory().unwrap();
+    for i in 0..7 {
+        person(&mut s, &format!("Person{i} Test"), Sex::Female);
+    }
+    // Read everything three at a time, each call using only the previous answer.
+    let mut seen: Vec<String> = vec![];
+    let mut after: Option<String> = None;
+    let mut pages = 0;
+    loop {
+        let r = list_people(
+            &s,
+            &opts(|o| {
+                o.limit = 3;
+                o.after = after.clone();
+                o.fields = Some(vec!["id".into()]);
+            }),
+        )
+        .unwrap();
+        pages += 1;
+        assert_eq!(r["total"], 7);
+        if pages == 1 {
+            assert!(r.get("changed_since_start").is_none(), "the first page has nothing to compare");
+        } else {
+            assert_eq!(r["changed_since_start"], false);
+        }
+        seen.extend(r["people"].as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap().to_string()));
+        match r["next_cursor"].as_str() {
+            Some(c) => after = Some(c.to_string()),
+            None => {
+                assert_eq!(r["remaining_after_this_page"], 0);
+                break;
+            }
+        }
+    }
+    assert_eq!(pages, 3);
+    let mut unique = seen.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!((seen.len(), unique.len()), (7, 7), "nobody twice, nobody missed");
+    assert_eq!(seen, unique, "in id order");
+
+    // A change made between pages is reported, and it does not shift the page after the cursor.
+    let first = list_people(&s, &opts(|o| o.limit = 3)).unwrap();
+    let cursor = first["next_cursor"].as_str().unwrap().to_string();
+    let next_before = list_people(&s, &opts(|o| (o.limit = 3, o.after = Some(cursor.clone())).0)).unwrap();
+    person(&mut s, "Late Arrival", Sex::Male);
+    let next_after = list_people(&s, &opts(|o| (o.limit = 3, o.after = Some(cursor.clone())).0)).unwrap();
+    assert_eq!(next_before["changed_since_start"], false);
+    assert_eq!(next_after["changed_since_start"], true);
+    let ids = |v: &Value| v["people"].as_array().unwrap().iter().map(|p| p["id"].clone()).collect::<Vec<_>>();
+    // The new person has the newest id, so it comes at the end; the page after the cursor is exactly the same.
+    assert_eq!(ids(&next_after), ids(&next_before));
+
+    // Junk cursors are errors, not an empty or restarted list.
+    for bad in ["garbage", "abc~", "~"] {
+        assert!(list_people(&s, &opts(|o| o.after = Some(bad.into()))).is_err(), "{bad}");
+    }
+}

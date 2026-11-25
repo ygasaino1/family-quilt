@@ -15,8 +15,9 @@ until the user tells you it was approved.
 5. **Look around.** (For read-only work the short guide `family-quilt://guide/reading`, or `GET /agent/v1/guide/reading`, is enough.) `search_people` returns cards (birth year, parents, partners, number of children and, for people
    still waiting, the `proposal_id`) so you can tell same-named people apart. `list_people`
    (`GET /agent/v1/directory`) pages through everyone without a name: `status` (verified, pending, all), `name`, `sex`,
-   `no_parents`, `no_children`, `no_partners` (loose ends), `created_by_proposal`, `offset`, `limit` (default 50,
-   max 2000). Follow `next_offset` until it is null. Keep it small: `fields` (`id,name,sex,birth_year,...`),
+   `no_parents`, `no_children`, `no_partners` (loose ends), `created_by_proposal`, `after`, `limit` (default 50,
+   max 2000). To read on, pass the result's `next_cursor` as `after`, unchanged, until it is null. If a page says
+   `changed_since_start: true`, the tree changed while you were reading: start again before trusting totals. Keep it small: `fields` (`id,name,sex,birth_year,...`),
    `format=columns` (`{columns, rows}`) and `group_by=sex` (or `status`) for counts only. A wrong value (for example
    `sex=banana`) or an unknown parameter is an error that lists what is allowed, never a silent empty list; the result
    echoes the `filters` it applied and a `tree_version` that changes when the tree does.

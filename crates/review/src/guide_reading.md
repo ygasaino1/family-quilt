@@ -30,7 +30,7 @@ and echoes the `filters` that were applied, so you can see what was asked. Unkno
 
 ## Paging and staleness
 
-`limit` is 50 by default and 2000 at most. Follow `next_offset` until it is null. Every list and search result has
+`limit` is 50 by default and 2000 at most. To read on, pass the result's `next_cursor` as `after`, unchanged (it works in a new, stateless call: it holds everything needed), until `next_cursor` is null. A page with `changed_since_start: true` means the tree changed since the first page: start again before trusting the totals. Every list and search result has
 `tree_version`; if it is the same as last time, nothing has changed and you can reuse what you read.
 
 Over HTTP the same calls are `GET /agent/v1/directory?sex=female&fields=name,birth_year&format=columns` and

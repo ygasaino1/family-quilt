@@ -45,7 +45,7 @@ pub fn tool_definitions() -> Value {
       },
       {
         "name": "list_people",
-        "description": "Page through people without needing a name. Filters combine (AND): `status`, `name` substring, `sex`, `no_parents`/`no_children`/`no_partners` (loose ends), `created_by_proposal`. Wrong filter values are errors, never silently empty; the result echoes the `filters` applied and `tree_version`. To keep it small: `fields` picks card fields (name, sex, birth_year are cheap; parents, partners, children_count, proposal_id cost more), `format: columns` returns {columns, rows} instead of one object per person, and `group_by` (sex or status) returns only counts. `limit` up to 2000 (default 50); follow `next_offset` until null.",
+        "description": "Page through people without needing a name. Filters combine (AND): `status`, `name` substring, `sex`, `no_parents`/`no_children`/`no_partners` (loose ends), `created_by_proposal`. Wrong filter values are errors, never silently empty; the result echoes the `filters` applied and `tree_version`. To keep it small: `fields` picks card fields (name, sex, birth_year are cheap; parents, partners, children_count, proposal_id cost more), `format: columns` returns {columns, rows} instead of one object per person, and `group_by` (sex or status) returns only counts. `limit` up to 2000 (default 50); to read more, pass the previous result's `next_cursor` as `after` until it is null. If `changed_since_start` is true the tree changed while you were reading: re-run from the start before trusting totals.",
         "inputSchema": {"type": "object", "properties": {
             "status": {"type": "string", "enum": ["verified", "pending", "all"]},
             "name": {"type": "string"},
@@ -55,7 +55,7 @@ pub fn tool_definitions() -> Value {
             "group_by": {"type": "string", "enum": ["sex", "status"], "description": "Return counts per value, no people"},
             "no_parents": {"type": "boolean"}, "no_children": {"type": "boolean"}, "no_partners": {"type": "boolean"},
             "created_by_proposal": {"type": "string"},
-            "offset": {"type": "integer", "minimum": 0},
+            "after": {"type": "string", "description": "The `next_cursor` of the previous page, unchanged"},
             "limit": {"type": "integer", "minimum": 1, "maximum": 2000, "description": "Default 50"}
         }},
         "annotations": {"readOnlyHint": true}
@@ -155,7 +155,7 @@ pub fn call_tool(st: &Shared, agent: &str, name: &str, args: &Value) -> Value {
                 no_children: b("no_children"),
                 no_partners: b("no_partners"),
                 created_by_proposal: Some(s("created_by_proposal")).filter(|x| !x.is_empty()),
-                offset: n("offset", 0) as usize,
+                after: Some(s("after")).filter(|x| !x.is_empty()),
                 limit: n("limit", 0) as usize,
                 fields: args.get("fields").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()),
                 columnar: match args.get("format").and_then(Value::as_str) {

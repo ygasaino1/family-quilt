@@ -68,7 +68,8 @@ pub struct ListOpts {
     pub no_children: bool,
     pub no_partners: bool,
     pub created_by_proposal: Option<String>,
-    pub offset: usize,
+    /// Cursor from the previous page's `next_cursor`: continue after the last person you received.
+    pub after: Option<String>,
     pub limit: usize,
     /// Which card fields to return (default: all). Cheap ones skip the relative lookups.
     pub fields: Option<Vec<String>>,
@@ -170,10 +171,21 @@ pub fn list_people(store: &Store, o: &ListOpts) -> Result<Value> {
         return Ok(json!({"group_by": by, "groups": groups, "total": total, "filters": applied, "tree_version": version}));
     }
     let limit = if o.limit == 0 { LIST_DEFAULT } else { o.limit.min(LIST_MAX) };
+    // A cursor is `<tree_version when the first page was read>~<last id received>`; people are sorted by id.
+    let (start_version, after_id) = match o.after.as_deref().filter(|c| !c.is_empty()) {
+        None => (None, None),
+        Some(c) => match c.split_once('~') {
+            Some((v, id)) if !id.is_empty() => (Some(v.to_string()), Some(id.to_string())),
+            _ => return Err(bad("after", "not a cursor: pass the `next_cursor` value from the previous page unchanged".into())),
+        },
+    };
+    let from = after_id.as_ref().map_or(0, |id| hits.partition_point(|&i| g.people[i].id.as_str() <= id.as_str()));
+    let window = &hits[from..];
+    let slice = &window[..window.len().min(limit)];
     let wanted: Vec<&str> = fields.clone().unwrap_or_else(|| CARD_FIELDS.to_vec());
     let needs_card = wanted.iter().any(|f| ["proposal_id", "parents", "partners", "children_count"].contains(f));
     let mut page: Vec<Value> = vec![];
-    for &i in hits.iter().skip(o.offset).take(limit) {
+    for &i in slice {
         let p = &g.people[i];
         let full = if needs_card {
             card(store, &p.id)?
@@ -182,8 +194,16 @@ pub fn list_people(store: &Store, o: &ListOpts) -> Result<Value> {
         };
         page.push(full);
     }
-    let next = o.offset + page.len();
-    let mut out = json!({"total": total, "offset": o.offset, "next_offset": if next < total { json!(next) } else { Value::Null }, "filters": applied, "tree_version": version});
+    let first_version = start_version.clone().unwrap_or_else(|| version.clone());
+    let next_cursor = match slice.last() {
+        Some(&last) if slice.len() < window.len() => json!(format!("{first_version}~{}", g.people[last].id)),
+        _ => Value::Null,
+    };
+    let mut out = json!({"total": total, "remaining_after_this_page": window.len() - slice.len(), "next_cursor": next_cursor, "filters": applied, "tree_version": version});
+    if let Some(v) = start_version {
+        // The tree changed since the first page was read: people may have been added or removed in the part already read.
+        out["changed_since_start"] = json!(v != version);
+    }
     if o.columnar {
         let rows: Vec<Value> = page.iter().map(|c| Value::Array(wanted.iter().map(|f| c[*f].clone()).collect())).collect();
         out["columns"] = json!(wanted);
