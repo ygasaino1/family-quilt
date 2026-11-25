@@ -6,3 +6,4 @@
 *.ged
 data/
 web/tests/out/
+!crates/store/tests/data/
