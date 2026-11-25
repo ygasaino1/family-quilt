@@ -86,7 +86,7 @@ function fieldInput(field, value, id) {
 }
 
 /** Send corrections for several records; fields are `{kind, target_id, field, value}`. Date and certainty go together. */
-async function sendEdits(proposalId, specs) {
+async function sendEdits(proposalId, specs, note = '') {
   const groups = new Map();
   for (const s of specs) {
     const k = s.kind + '|' + s.target_id;
@@ -103,7 +103,7 @@ async function sendEdits(proposalId, specs) {
     }
     for (const f of Object.keys(g.fields)) if (g.fields[f] === '') g.fields[f] = null;
     if ('is_living' in g.fields && g.fields.is_living !== null) g.fields.is_living = g.fields.is_living === 'true';
-    await api(`/proposals/${proposalId}/edit`, { method: 'POST', body: { kind: g.kind, target_id: g.target_id, fields: g.fields } });
+    await api(`/proposals/${proposalId}/edit`, { method: 'POST', body: { kind: g.kind, target_id: g.target_id, fields: g.fields, note: note.trim() || undefined } });
   }
 }
 
@@ -156,8 +156,10 @@ async function renderDetail(box, id) {
     const mine = edits.filter((e) => targets.includes(e.target_id));
     const inputs = fields.map((f) => ({ ...f, input: fieldInput(f.field, f.value, `e-${f.target_id}-${f.field}`) }));
     const err = h('p', { class: 'conflict', role: 'alert', hidden: true });
+    const noteId = `en-${fields[0]?.target_id}`;
+    const noteIn = h('input', { id: noteId, type: 'text', maxlength: '300', placeholder: t('review.note_ph') });
     const form = h('div', { class: 'edit-form', hidden: true },
-      h('div', { class: 'props' }, ...inputs.flatMap((f) => [h('label', { for: f.input.el.id }, t('field.' + f.field)), f.input.el])), err,
+      h('div', { class: 'props' }, ...inputs.flatMap((f) => [h('label', { for: f.input.el.id }, t('field.' + f.field)), f.input.el]), h('label', { for: noteId }, t('review.note')), noteIn), err,
       h('div', { class: 'tools' },
         h('button', { class: 'btn tiny primary', onclick: async () => {
           const dirty = inputs.filter((f) => String(f.input.get()) !== (f.input.shown ?? String(f.value ?? '')));
@@ -165,7 +167,7 @@ async function renderDetail(box, id) {
           try {
             const changed = [];
             for (const f of dirty) changed.push({ kind: f.kind, target_id: f.target_id, field: f.field, value: await stored(f.field, f.input.get()), was: f.value });
-            await sendEdits(id, changed);
+            await sendEdits(id, changed, noteIn.value);
             await renderDetail(box, id);
           } catch (e) {
             err.textContent = problems(e);
@@ -239,19 +241,20 @@ async function renderDetail(box, id) {
       const toBox = h('span', { class: 'to' }, dval(f.field, f.to), corrected ? h('span', { class: 'chip', title: `${t('review.assistant_said')}: ${corrected.original ?? ''}` }, t('review.edited')) : null);
       const pencil = h('button', { class: 'btn tiny', title: t('review.edit'), 'aria-label': t('review.edit'), onclick: () => {
         const input = fieldInput(f.field, f.to, `ce-${c.id}-${f.field}`);
+        const noteIn = h('input', { type: 'text', class: 'note-in', maxlength: '300', placeholder: t('review.note_ph'), 'aria-label': t('review.note') });
         const save = async (value, typed = true) => {
           try {
-            await sendEdits(id, [{ kind: 'change', target_id: c.id, field: f.field, value: typed ? await stored(f.field, value) : value, was: f.to }]);
+            await sendEdits(id, [{ kind: 'change', target_id: c.id, field: f.field, value: typed ? await stored(f.field, value) : value, was: f.to }], typed ? noteIn.value : '');
             await renderDetail(box, id);
           } catch (e) {
             toast(problems(e), 'error');
           }
         };
-        input.el.addEventListener('keydown', (ev) => {
+        for (const el of [input.el, noteIn]) el.addEventListener('keydown', (ev) => {
           if (ev.key === 'Enter') save(input.get());
           if (ev.key === 'Escape') { ev.stopPropagation(); renderDetail(box, id); }
         });
-        fill(toBox, input.el, h('button', { class: 'btn tiny primary', onclick: () => save(input.get()) }, t('review.edit_save')),
+        fill(toBox, input.el, noteIn, h('button', { class: 'btn tiny primary', onclick: () => save(input.get()) }, t('review.edit_save')),
           corrected ? h('button', { class: 'btn tiny', onclick: () => save(corrected.original ?? '', false) }, t('review.edit_undo')) : null);
         input.el.focus();
       } }, icon('edit', 14));

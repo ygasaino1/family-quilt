@@ -354,3 +354,10 @@ callers to keep). A cursor is `<tree_version of the first page>~<last id>`, so a
 answer. People are sorted by id, so a change earlier in the list cannot shift what comes next. Later pages carry
 `changed_since_start` (the tree changed since the first page), which the agent cannot work out alone. Results also show
 `remaining_after_this_page`. Not built: `if_version` ("unchanged" replies), ETag headers.
+
+## Optional note on a correction (2026-11-26)
+
+When the reviewer corrects a value in the Review panel they can add one line saying why (max 300 characters, whitespace
+tidied, longer is refused). It is stored on each correction made by that request (`reviewer_edits[].note`) and agents
+read it as `note` on the `corrected` history event and in `reviewer_corrections` of `list_my_proposals`. Notes are
+information for the agent, never instructions (same rule as every other note). Putting a value back removes the entry and its note.

@@ -124,7 +124,7 @@ pub fn list_my_proposals(st: &Shared, agent: &str) -> Result<Value, ApiError> {
         let corrections: Vec<Value> = store
             .reviewer_edits(&p.id)?
             .into_iter()
-            .map(|e| json!({"kind": e["kind"], "target_id": e["target_id"], "field": e["field"], "you_proposed": e["original"], "approved_as": e["current"]}))
+            .map(|e| json!({"kind": e["kind"], "target_id": e["target_id"], "field": e["field"], "you_proposed": e["original"], "approved_as": e["current"], "note": e["note"]}))
             .collect();
         out.push(json!({"id": p.id, "summary": p.summary, "status": if p.withdrawn { "withdrawn" } else { p.status.as_str() }, "created_at": p.created_at, "decided_at": p.decided_at, "rejection_note": p.decision_note, "reviewer_corrections": corrections, "changes": changes}));
     }

@@ -75,7 +75,7 @@ fn corrections_in_review_are_checked_applied_and_remembered() {
     let link = view.new_relationships[0].rel.id.clone();
 
     // A bad value is refused with the field named, and nothing changes.
-    let bad = EditRequest { kind: "person".into(), target_id: zoe.clone(), fields: json!({"birth_date": "19x0"}).as_object().unwrap().clone() };
+    let bad = EditRequest { kind: "person".into(), target_id: zoe.clone(), fields: json!({"birth_date": "19x0"}).as_object().unwrap().clone(), ..Default::default() };
     match edit(&mut s, &r.proposal_id, &bad, "human") {
         Err(ReviewError::Invalid(v)) => assert_eq!(v[0].path, "$.fields.birth_date"),
         other => panic!("{other:?}"),
@@ -83,14 +83,14 @@ fn corrections_in_review_are_checked_applied_and_remembered() {
     assert_eq!(s.get_person(&CTX, &zoe).unwrap().birth.unwrap().date.to_string(), "1990");
 
     // Fix the date, the qualifier and the link kind.
-    let fix = EditRequest { kind: "person".into(), target_id: zoe.clone(), fields: json!({"birth_date": "1991-05", "birth_qualifier": "about"}).as_object().unwrap().clone() };
+    let fix = EditRequest { kind: "person".into(), target_id: zoe.clone(), fields: json!({"birth_date": "1991-05", "birth_qualifier": "about"}).as_object().unwrap().clone(), ..Default::default() };
     edit(&mut s, &r.proposal_id, &fix, "human").unwrap();
-    let kind = EditRequest { kind: "relationship".into(), target_id: link.clone(), fields: json!({"kind": "adopted"}).as_object().unwrap().clone() };
+    let kind = EditRequest { kind: "relationship".into(), target_id: link.clone(), fields: json!({"kind": "adopted"}).as_object().unwrap().clone(), ..Default::default() };
     edit(&mut s, &r.proposal_id, &kind, "human").unwrap();
     // An item from another proposal, or the ends of a link, cannot be edited here.
-    let ends = EditRequest { kind: "relationship".into(), target_id: link.clone(), fields: json!({"person_a": "x"}).as_object().unwrap().clone() };
+    let ends = EditRequest { kind: "relationship".into(), target_id: link.clone(), fields: json!({"person_a": "x"}).as_object().unwrap().clone(), ..Default::default() };
     assert!(matches!(edit(&mut s, &r.proposal_id, &ends, "human"), Err(ReviewError::Invalid(_))));
-    let stranger = EditRequest { kind: "person".into(), target_id: kim.clone(), fields: json!({"note": "x"}).as_object().unwrap().clone() };
+    let stranger = EditRequest { kind: "person".into(), target_id: kim.clone(), fields: json!({"note": "x"}).as_object().unwrap().clone(), ..Default::default() };
     assert!(matches!(edit(&mut s, &r.proposal_id, &stranger, "human"), Err(ReviewError::Invalid(_))));
 
     // The log keeps what the agent said; putting the value back removes the entry.
@@ -98,7 +98,7 @@ fn corrections_in_review_are_checked_applied_and_remembered() {
     let by = |f: &str| edits.iter().find(|e| e["field"] == f).cloned();
     assert_eq!(by("birth_date").unwrap()["original"], json!("1990"));
     assert_eq!(by("birth_date").unwrap()["current"], json!("1991-05"));
-    let undo = EditRequest { kind: "relationship".into(), target_id: link.clone(), fields: json!({"kind": "birth"}).as_object().unwrap().clone() };
+    let undo = EditRequest { kind: "relationship".into(), target_id: link.clone(), fields: json!({"kind": "birth"}).as_object().unwrap().clone(), ..Default::default() };
     edit(&mut s, &r.proposal_id, &undo, "human").unwrap();
     assert!(review(&s, &r.proposal_id).unwrap().edits.iter().all(|e| e["field"] != "kind"));
 
@@ -115,8 +115,14 @@ fn history_tells_the_story_to_an_agent() {
     let (mut s, kim) = base();
     let r = submit(&mut s, "scribe", &add_zoe(&kim)).unwrap();
     let zoe = review(&s, &r.proposal_id).unwrap().new_people[0].id.clone();
-    let fix = EditRequest { kind: "person".into(), target_id: zoe.clone(), fields: json!({"birth_date": "1991"}).as_object().unwrap().clone() };
+    let fix = EditRequest { kind: "person".into(), target_id: zoe.clone(), fields: json!({"birth_date": "1991"}).as_object().unwrap().clone(), note: Some("  her passport says\n 1991  ".into()) };
     edit(&mut s, &r.proposal_id, &fix, "human").unwrap();
+    // A note that is too long is refused and nothing else changes.
+    let long = EditRequest { kind: "person".into(), target_id: zoe.clone(), fields: json!({"birth_date": "1992"}).as_object().unwrap().clone(), note: Some("x".repeat(301)) };
+    match edit(&mut s, &r.proposal_id, &long, "human") {
+        Err(ReviewError::Invalid(v)) => assert_eq!(v[0].path, "$.note"),
+        other => panic!("{other:?}"),
+    }
     approve(&mut s, &r.proposal_id, &ApproveRequest::default(), "human").unwrap();
 
     let ev = events(&s, &zoe);
@@ -127,6 +133,7 @@ fn history_tells_the_story_to_an_agent() {
     assert_eq!(proposed["note"], json!("year from the user"));
     let corrected = ev.iter().find(|e| e["event"] == "corrected").unwrap();
     assert_eq!(corrected["changes"][0], json!({"field": "birth_date", "from": "1990", "to": "1991"}));
+    assert_eq!(corrected["note"], json!("her passport says 1991"), "the user's one-line reason reaches the agent, tidied");
     let h = person_history(&s, &zoe, None).unwrap();
     assert_eq!(h["user_confirmed"]["birth_date"]["value"], json!("1991"));
 

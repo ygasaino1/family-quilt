@@ -117,7 +117,9 @@ fn events_for(store: &Store, target_type: &str, id: &str, events: &mut Vec<Event
                 push(
                     events,
                     &at,
-                    with(json!({"who": {"type": "user"}, "event": "corrected", "proposal_id": pid, "changes": [{"field": e["field"], "from": e["original"], "to": e["current"]}], "at": at})),
+                    with(
+                        json!({"who": {"type": "user"}, "event": "corrected", "proposal_id": pid, "changes": [{"field": e["field"], "from": e["original"], "to": e["current"]}], "note": note_of(e["note"].as_str()), "at": at}),
+                    ),
                 );
             }
         }

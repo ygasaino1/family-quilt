@@ -226,6 +226,8 @@
   "common.no": "No",
   "review.edit": "Correct a value",
   "review.edit_save": "Save",
+  "review.note": "Why (optional)",
+  "review.note_ph": "One line the assistant will read",
   "review.edit_undo": "Put back what the assistant said",
   "review.edited": "edited",
   "review.assistant_said": "The assistant said",

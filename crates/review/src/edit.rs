@@ -15,14 +15,19 @@ const CTX: AccessContext = AccessContext::Everything;
 
 type Reader = Box<dyn Fn(&str) -> Value>;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct EditRequest {
     /// `person`, `person_name`, `relationship` (new records of this proposal) or `change` (a proposed edit).
     pub kind: String,
     pub target_id: String,
     /// `{field: new value}`; `null` clears a field that may be cleared.
     pub fields: Map<String, Value>,
+    /// Why, in a line, for the agent to read later (optional). Kept with each correction made by this request.
+    #[serde(default)]
+    pub note: Option<String>,
 }
+
+pub const NOTE_MAX: usize = 300;
 
 /// Apply the corrections; returns the proposal's list of corrections as it now stands.
 pub fn edit(store: &mut Store, proposal_id: &str, req: &EditRequest, by: &str) -> Result<Vec<Value>> {
@@ -32,6 +37,10 @@ pub fn edit(store: &mut Store, proposal_id: &str, req: &EditRequest, by: &str) -
     }
     if req.fields.is_empty() {
         return Err(ReviewError::Invalid(vec![FieldError::new("$.fields", "empty", "nothing to change")]));
+    }
+    let note = req.note.as_deref().map(|n| n.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|n| !n.is_empty());
+    if note.as_ref().is_some_and(|n| n.chars().count() > NOTE_MAX) {
+        return Err(ReviewError::Invalid(vec![FieldError::new("$.note", "too_long", format!("keep the note to {NOTE_MAX} characters"))]));
     }
     let recs = store.proposal_records(&CTX, proposal_id)?;
     let not_here = || ReviewError::Invalid(vec![FieldError::new("$.target_id", "not_in_proposal", "that item does not belong to this proposal")]);
@@ -110,7 +119,11 @@ pub fn edit(store: &mut Store, proposal_id: &str, req: &EditRequest, by: &str) -
             log.remove(i);
         }
         if now != original {
-            log.push(json!({"kind": req.kind, "target_id": req.target_id, "field": f, "original": original, "current": now, "at": family_store::ids::now_iso()}));
+            let mut e = json!({"kind": req.kind, "target_id": req.target_id, "field": f, "original": original, "current": now, "at": family_store::ids::now_iso()});
+            if let Some(n) = &note {
+                e["note"] = json!(n);
+            }
+            log.push(e);
         }
     }
     store.set_reviewer_edits(proposal_id, &log)?;

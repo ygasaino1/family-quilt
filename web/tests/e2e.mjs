@@ -319,6 +319,7 @@ try {
     await page.click('.edit-form .btn.primary');
     await page.waitForFunction(() => /birth date/i.test(document.querySelector('.edit-form .conflict:not([hidden])')?.textContent || ''));
     allow400 = false;
+    await page.fill('.edit-form input[id^="en-"]', 'checked her certificate');
     await page.fill('.edit-form input[id$="-birth_date"]', '1981').catch(async (e) => { throw new Error(e.message.split('\n')[0] + ' | ' + (await page.innerHTML('#review-root')).slice(0, 1500)); });
     await page.click('.edit-form .btn.primary');
     await page.waitForSelector('.item .chip', { timeout: 8000 });
@@ -329,6 +330,7 @@ try {
     const seen = await agent('/people/' + tala.id);
     const corrected = seen.history.find((e) => e.event === 'corrected');
     assert.deepEqual(corrected.changes[0], { field: 'birth_date', from: '1980', to: '1981' });
+    assert.equal(corrected.note, 'checked her certificate');
     assert.equal(seen.user_confirmed.birth_date.value, '1981');
     assert.ok(seen.history.some((e) => e.event === 'approved'));
 
