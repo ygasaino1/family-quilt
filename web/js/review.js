@@ -1,6 +1,8 @@
 // The review panel, docked beside the quilt: what an AI assistant proposed, in your words and theirs.
-import { t, fmtAgo } from './i18n.js';
+import { t, fmtAgo, fmtDate } from './i18n.js';
+import { pref } from './prefs.js';
 import { api } from './api.js';
+import { toInput, fromInput, DATE_FIELDS } from './dates.js';
 import { h, toast, sexWord, sexLetter, fill, icon } from './dom.js';
 
 let app;
@@ -22,7 +24,16 @@ export function onDataChanged() {
 
 const val = (v) => (v === null || v === undefined || v === '' ? h('i', { class: 'muted' }, t('review.empty')) : typeof v === 'object' ? JSON.stringify(v) : String(v));
 const agentName = (by) => String(by || '').replace(/^agent:/, '') || t('review.someone');
-const born = (q) => (q.birth ? String(q.birth.date ?? q.birth) : '');
+const born = (q) => (q.birth ? toInput(String(q.birth.date ?? q.birth)) : '');
+/** A value to show: dates read in the chosen calendar, everything else as it is. */
+const dval = (field, v) => (DATE_FIELDS.includes(field) && v && pref('calendar') === 'jalali' ? h('span', {}, fmtDate(String(v), 'exact')) : val(v));
+/** The text to store for a typed value: dates typed in another calendar are converted by the server. */
+async function stored(field, text) {
+  if (!DATE_FIELDS.includes(field) || !text) return text;
+  const r = await fromInput(text);
+  if (r.approximate && r.note) toast(r.note);
+  return r.stored;
+}
 const WARN_CODES = ['parent_too_young', 'parent_too_old', 'parent_died_before_birth', 'death_before_birth', 'possible_duplicate', 'likely_duplicate', 'link_kind_impact', 'person_removal_impact'];
 
 export async function show(id) {
@@ -63,14 +74,15 @@ const ENUMS = {
 /** An input for one field: a list for the fixed choices, a text box otherwise. `get()` gives the text typed or chosen. */
 function fieldInput(field, value, id) {
   const e = ENUMS[field];
-  const cur = value === null || value === undefined ? '' : String(value);
+  const date = DATE_FIELDS.includes(field);
+  const cur = value === null || value === undefined ? '' : date ? toInput(value) : String(value);
   if (e) {
     const sel = h('select', { id, 'aria-label': t('field.' + field) }, ...e.values.map((v) => h('option', { value: v, selected: v === cur }, e.label(v))));
     if (!e.values.includes(cur)) sel.prepend(h('option', { value: '', selected: true }, ''));
     return { el: sel, get: () => sel.value };
   }
   const inp = h('input', { type: 'text', id, value: cur, autocomplete: 'off', 'aria-label': t('field.' + field) });
-  return { el: inp, get: () => inp.value.trim() };
+  return { el: inp, get: () => inp.value.trim(), shown: cur };
 }
 
 /** Send corrections for several records; fields are `{kind, target_id, field, value}`. Date and certainty go together. */
@@ -148,9 +160,11 @@ async function renderDetail(box, id) {
       h('div', { class: 'props' }, ...inputs.flatMap((f) => [h('label', { for: f.input.el.id }, t('field.' + f.field)), f.input.el])), err,
       h('div', { class: 'tools' },
         h('button', { class: 'btn tiny primary', onclick: async () => {
-          const changed = inputs.filter((f) => String(f.input.get()) !== String(f.value ?? '')).map((f) => ({ kind: f.kind, target_id: f.target_id, field: f.field, value: f.input.get(), was: f.value }));
-          if (!changed.length) { form.hidden = true; return; }
+          const dirty = inputs.filter((f) => String(f.input.get()) !== (f.input.shown ?? String(f.value ?? '')));
+          if (!dirty.length) { form.hidden = true; return; }
           try {
+            const changed = [];
+            for (const f of dirty) changed.push({ kind: f.kind, target_id: f.target_id, field: f.field, value: await stored(f.field, f.input.get()), was: f.value });
             await sendEdits(id, changed);
             await renderDetail(box, id);
           } catch (e) {
@@ -222,12 +236,12 @@ async function renderDetail(box, id) {
       checks.push({ change: c, field: f.field, box: accept, over });
       // The new value can be corrected before accepting it; what the assistant proposed stays on record.
       const corrected = edits.find((e) => e.kind === 'change' && e.target_id === c.id && e.field === f.field);
-      const toBox = h('span', { class: 'to' }, val(f.to), corrected ? h('span', { class: 'chip', title: `${t('review.assistant_said')}: ${corrected.original ?? ''}` }, t('review.edited')) : null);
+      const toBox = h('span', { class: 'to' }, dval(f.field, f.to), corrected ? h('span', { class: 'chip', title: `${t('review.assistant_said')}: ${corrected.original ?? ''}` }, t('review.edited')) : null);
       const pencil = h('button', { class: 'btn tiny', title: t('review.edit'), 'aria-label': t('review.edit'), onclick: () => {
         const input = fieldInput(f.field, f.to, `ce-${c.id}-${f.field}`);
-        const save = async (value) => {
+        const save = async (value, typed = true) => {
           try {
-            await sendEdits(id, [{ kind: 'change', target_id: c.id, field: f.field, value, was: f.to }]);
+            await sendEdits(id, [{ kind: 'change', target_id: c.id, field: f.field, value: typed ? await stored(f.field, value) : value, was: f.to }]);
             await renderDetail(box, id);
           } catch (e) {
             toast(problems(e), 'error');
@@ -238,12 +252,12 @@ async function renderDetail(box, id) {
           if (ev.key === 'Escape') { ev.stopPropagation(); renderDetail(box, id); }
         });
         fill(toBox, input.el, h('button', { class: 'btn tiny primary', onclick: () => save(input.get()) }, t('review.edit_save')),
-          corrected ? h('button', { class: 'btn tiny', onclick: () => save(corrected.original ?? '') }, t('review.edit_undo')) : null);
+          corrected ? h('button', { class: 'btn tiny', onclick: () => save(corrected.original ?? '', false) }, t('review.edit_undo')) : null);
         input.el.focus();
       } }, icon('edit', 14));
       changeBlocks.push(h('div', { class: 'sugg' },
         h('span', { class: 'what' }, c.target_label, ' · ', t('field.' + f.field)),
-        h('span', { class: 'from' }, val(f.from)), h('span', { class: 'arrow' }, '→'), toBox, pencil,
+        h('span', { class: 'from' }, dval(f.field, f.from)), h('span', { class: 'arrow' }, '→'), toBox, pencil,
         h('label', {}, accept, ' ', t('review.accept')),
         f.conflict ? h('div', { class: 'conflict' }, t('review.conflict', { current: String(f.current ?? '') }), h('label', {}, over, ' ', t('review.overwrite'))) : null));
     }

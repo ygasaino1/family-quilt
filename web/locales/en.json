@@ -297,7 +297,7 @@
   "settings.calendar": "Show dates in",
   "settings.calendar_gregorian": "Gregorian calendar",
   "settings.calendar_jalali": "Jalali (Solar Hijri) calendar",
-  "settings.calendar_hint": "Dates are stored in one universal form, so this only changes how they read. Typing a date in the app still uses the Gregorian calendar.",
+  "settings.calendar_hint": "Dates are stored in one universal form, so this only changes how they read. Dates you type in the app use the same calendar.",
   "settings.privacy": "Privacy mode",
   "settings.privacy_hint": "Hides names on screen, for when someone is looking.",
   "settings.live": "Show live progress while the layout improves",

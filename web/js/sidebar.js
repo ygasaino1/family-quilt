@@ -1,5 +1,6 @@
 // The side panel: profile, editing, adding relatives, link kinds, history/undo, "how are we related?".
 import { t, fmtDate } from './i18n.js';
+import { toInput, fromInput } from './dates.js';
 import { api, ApiError } from './api.js';
 import { h, toast, confirmBox, sexWord, sexLetter, fill } from './dom.js';
 
@@ -226,7 +227,8 @@ function personDialog({ edit, role, anchor }) {
   const dlg = document.getElementById('dlg-person');
   const p = edit?.person;
   const nm = p?.names?.find((n) => n.is_primary) || p?.names?.[0];
-  const dateOf = (f) => (f ? String(f.date ?? f) : '');
+  const dateOf = (f) => (f ? toInput(String(f.date ?? f)) : '');
+  const shown = { bd: dateOf(p?.birth), dd: dateOf(p?.death) };
   const inputs = {
     given: h('input', { id: 'pf-given', value: nm?.given || '', autocomplete: 'off' }),
     family: h('input', { id: 'pf-family', value: nm?.family || '', autocomplete: 'off' }),
@@ -268,13 +270,24 @@ function personDialog({ edit, role, anchor }) {
       err.textContent = ex instanceof ApiError && ex.body?.errors ? ex.body.errors.map((x) => `${x.path}: ${x.message}`).join('; ') : ex.message;
     }
   });
+  /** The date to store (Gregorian) and its certainty. A date left as shown is kept as it was; a typed one is converted. */
+  async function dateAndQualifier(key, original, qualifier) {
+    const typed = inputs[key].value.trim();
+    if (!typed) return [null, null];
+    if (original && typed === shown[key]) return [String(original.date ?? original), qualifier.value];
+    const r = await fromInput(typed);
+    // A Jalali month or year only roughly matches a Gregorian one, so it is stored as "about" unless said otherwise.
+    return [r.stored, r.approximate && qualifier.value === 'exact' ? 'about' : qualifier.value];
+  }
   async function save() {
+    const [bd, bq] = await dateAndQualifier('bd', p?.birth, inputs.bq);
+    const [dd, dq] = await dateAndQualifier('dd', p?.death, inputs.dq);
     const fields = {
       sex: inputs.sex.value,
-      birth_date: inputs.bd.value.trim() || null,
-      birth_qualifier: inputs.bd.value.trim() ? inputs.bq.value : null,
-      death_date: inputs.dd.value.trim() || null,
-      death_qualifier: inputs.dd.value.trim() ? inputs.dq.value : null,
+      birth_date: bd,
+      birth_qualifier: bq,
+      death_date: dd,
+      death_qualifier: dq,
       note: inputs.note.value.trim() || null,
     };
     const nameFields = { given: inputs.given.value.trim() || null, family: inputs.family.value.trim() || null, full_name: inputs.full.value.trim() || [inputs.given.value, inputs.family.value].map((x) => x.trim()).filter(Boolean).join(' ') };

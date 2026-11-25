@@ -161,6 +161,13 @@ async fn agent_proposal_to_ui_approval_round_trip() {
     let (st, r) = agent(p, "POST", "/agent/v1/proposals", "my bot", Some(&body.to_string()));
     assert_eq!(st, 201, "{r}");
     let pid = r["proposal_id"].as_str().unwrap().to_string();
+    // The UI can ask the server to convert a Jalali date it is about to save.
+    let (st, c) = ui(p, "POST", "/api/calendar/convert", Some(r#"{"calendar":"jalali","date":"1329-05-12"}"#));
+    assert_eq!((st, c["stored"].as_str(), c["approximate"].as_bool()), (200, Some("1950-08-03"), Some(false)));
+    let (_, c) = ui(p, "POST", "/api/calendar/convert", Some(r#"{"calendar":"jalali","date":"1329"}"#));
+    assert_eq!((c["stored"].as_str(), c["approximate"].as_bool()), (Some("1950"), Some(true)));
+    assert_eq!(ui(p, "POST", "/api/calendar/convert", Some(r#"{"calendar":"jalali","date":"1404-12-30"}"#)).0, 400);
+    assert_eq!(ui(p, "POST", "/api/calendar/convert", Some(r#"{"calendar":"hijri","date":"1329"}"#)).0, 400);
     // The UI sees it as pending, with the agent's name.
     let (_, status) = ui(p, "GET", "/api/status", None);
     assert_eq!(status["pending_proposals"], 1);

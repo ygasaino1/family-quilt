@@ -33,7 +33,7 @@ fn iso(z: i32) -> String {
 }
 
 /// `(stored gregorian text, approximate, note)` for one Jalali `YYYY`, `YYYY-MM` or `YYYY-MM-DD`.
-fn convert(s: &str) -> Result<(String, bool, Option<String>), String> {
+pub fn convert(s: &str) -> Result<(String, bool, Option<String>), String> {
     let bad = || format!("'{s}' is not a Jalali date: use YYYY, YYYY-MM or YYYY-MM-DD with digits only");
     if !s.is_ascii() || !s.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
         return Err(bad());

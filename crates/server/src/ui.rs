@@ -44,6 +44,7 @@ pub fn routes() -> Router<Shared> {
         .route("/export/json", get(export_json))
         .route("/export/gedcom", get(export_gedcom))
         .route("/import/gedcom", post(import_gedcom).layer(axum::extract::DefaultBodyLimit::max(130 * 1024 * 1024)))
+        .route("/calendar/convert", post(calendar_convert))
         .route("/settings", get(get_settings).put(put_settings))
         .route("/settings/agent", get(agent_settings))
         .route("/settings/agent/test", post(agent_test))
@@ -287,6 +288,24 @@ async fn get_settings(State(st): State<Shared>) -> Result<Json<Value>, ApiError>
         o.insert((*k).into(), json!(s.meta_get(&CTX, &format!("setting:{k}"))?.unwrap_or_default()));
     }
     Ok(Json(Value::Object(o)))
+}
+
+#[derive(Deserialize)]
+struct ConvertReq {
+    calendar: String,
+    date: String,
+}
+
+/// A date typed in another calendar, as the Gregorian text the tree stores (the form calls this before saving).
+async fn calendar_convert(Json(b): Json<ConvertReq>) -> Result<Json<Value>, ApiError> {
+    match b.calendar.as_str() {
+        "gregorian" => Ok(Json(json!({"stored": b.date, "approximate": false}))),
+        "jalali" => match family_review::calendar::convert(b.date.trim()) {
+            Ok((stored, approximate, note)) => Ok(Json(json!({"stored": stored, "approximate": approximate, "note": note}))),
+            Err(m) => Err(ApiError::bad_request(&m)),
+        },
+        _ => Err(ApiError::bad_request("calendar must be gregorian or jalali")),
+    }
 }
 
 async fn put_settings(State(st): State<Shared>, Json(b): Json<Value>) -> Result<Json<Value>, ApiError> {

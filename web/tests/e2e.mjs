@@ -676,6 +676,28 @@ try {
     await p3.close();
   });
 
+  await check('calendar setting: a date typed in Jalali is stored as Gregorian', async () => {
+    const p4 = await ctx.newPage();
+    await p4.goto(base + '/');
+    await p4.waitForSelector('html[data-ready="1"]');
+    await p4.evaluate(async () => {
+      localStorage.setItem('fq.calendar', 'jalali');
+      (await import('/js/sidebar.js')).addFirstPerson();
+    });
+    await p4.fill('#pf-given', 'Jalali');
+    await p4.fill('#pf-family', 'Typed');
+    await p4.fill('#pf-bd', '1329-05-12');
+    await p4.click('#pf-save');
+    await p4.waitForSelector('#dlg-person', { state: 'hidden' });
+    const found = await ui('/people?q=Jalali%20Typed');
+    const hit = (found.people || found)[0];
+    assert.ok(hit, JSON.stringify(found));
+    const full = await ui('/people/' + hit.id);
+    assert.equal(String((full.person || full).birth.date), '1950-08-03', JSON.stringify(full));
+    await p4.evaluate(() => localStorage.setItem('fq.calendar', 'gregorian'));
+    await p4.close();
+  });
+
   await check('no missing translation keys and no console errors', async () => {
     assert.deepEqual(warnings, []);
     assert.deepEqual(errors, []);

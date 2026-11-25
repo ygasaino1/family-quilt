@@ -325,5 +325,8 @@ Prompted by an agent's review of the MCP design after a large import.
 - **Algorithm.** `crates/store/src/jalali.rs`, a port of the `jalaali-js` leap table (valid for years -61 to 3177 AP). Tests
   compare every leap flag and about 3,900 sample days with that library and round-trip every day from 1700 to 2100.
 - **Display.** Setting "Show dates in" (Gregorian or Jalali) changes only `fmtDate`, using the browser's Persian calendar.
-- **Not done:** typing dates in Jalali inside the app (entry is still Gregorian); Hijri (lunar) calendar, which depends on
+- **Typing in the app:** with the Jalali setting on, the person form and the review corrections show dates in Jalali and
+  convert what is typed through `POST /api/calendar/convert` before saving (a date left as shown is kept as it was; a typed
+  Jalali month or year becomes `about`). `web/js/dates.js` does the showing, the server does the converting.
+- **Not done:** Hijri (lunar) calendar, which depends on
   moon sighting and would need a "may be a day off" qualifier; showing the original text of partial dates in the UI.
