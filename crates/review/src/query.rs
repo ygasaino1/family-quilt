@@ -58,6 +58,28 @@ pub fn parse_sex(s: &str) -> std::result::Result<family_store::Sex, String> {
     }
 }
 
+/// The word agents see for a sex (`female`), whatever vocabulary it was given in; anything else is returned unchanged.
+/// The store keeps the codes (M, F, X, U); agents only ever read and write the words.
+pub fn sex_word(s: family_store::Sex) -> &'static str {
+    use family_store::Sex;
+    match s {
+        Sex::Male => "male",
+        Sex::Female => "female",
+        Sex::Other => "other",
+        Sex::Unknown => "unknown",
+    }
+}
+
+/// For a changed field called `sex`, the value in words (`"F"` -> `"female"`); every other field and value is returned as is.
+pub fn agent_value(field: &str, v: &serde_json::Value) -> serde_json::Value {
+    if field == "sex" {
+        if let Some(x) = v.as_str().and_then(|t| parse_sex(t).ok()) {
+            return serde_json::Value::from(sex_word(x));
+        }
+    }
+    v.clone()
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct ListOpts {
     /// `verified` (default), `pending` or `all`.
@@ -157,7 +179,7 @@ pub fn list_people(store: &Store, o: &ListOpts) -> Result<Value> {
     hits.sort_by(|&a, &b| g.people[a].id.cmp(&g.people[b].id));
     let total = hits.len();
     let applied = json!({
-        "status": status, "name": o.name, "sex": sex_filter.map(|s| s.as_str()),
+        "status": status, "name": o.name, "sex": sex_filter.map(sex_word),
         "no_parents": o.no_parents, "no_children": o.no_children, "no_partners": o.no_partners,
         "created_by_proposal": o.created_by_proposal,
     });
@@ -165,7 +187,7 @@ pub fn list_people(store: &Store, o: &ListOpts) -> Result<Value> {
     if let Some(by) = o.group_by.as_deref() {
         let mut groups = std::collections::BTreeMap::<String, usize>::new();
         for &i in &hits {
-            let key = if by == "sex" { g.people[i].sex.as_str().to_string() } else { g.people[i].status.as_str().to_string() };
+            let key = if by == "sex" { sex_word(g.people[i].sex).to_string() } else { g.people[i].status.as_str().to_string() };
             *groups.entry(key).or_default() += 1;
         }
         return Ok(json!({"group_by": by, "groups": groups, "total": total, "filters": applied, "tree_version": version}));

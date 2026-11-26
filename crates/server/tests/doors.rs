@@ -303,7 +303,7 @@ async fn mcp_has_exactly_nine_tools_and_no_way_to_approve_edit_or_delete() {
         let r = call(50, "list_people", json!({"status": "all", "sex": sex}));
         assert_ne!(r["result"]["isError"], true, "{sex}: {r}");
         let v: Value = serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(v["filters"]["sex"], family_store::Sex::parse(&sex.chars().next().unwrap().to_uppercase().to_string()).unwrap().as_str(), "{v}");
+        assert_eq!(v["filters"]["sex"], family_review::query::sex_word(family_review::query::parse_sex(sex).unwrap()), "{v}");
         v["total"].as_u64().unwrap()
     };
     assert_eq!((tot("M"), tot("m")), (tot("male"), tot("Male")));

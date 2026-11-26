@@ -13,6 +13,14 @@ fn lock(st: &Shared) -> std::sync::MutexGuard<'_, family_store::Store> {
     st.store.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// A change's `{field: {from, to}}` with values in the words agents use.
+fn agent_patch(patch: &Value) -> Value {
+    match patch.as_object() {
+        Some(o) => Value::Object(o.iter().map(|(f, ft)| (f.clone(), json!({"from": query::agent_value(f, &ft["from"]), "to": query::agent_value(f, &ft["to"])}))).collect()),
+        None => patch.clone(),
+    }
+}
+
 pub fn search_people(st: &Shared, q: &str, limit: usize, pending: bool) -> Result<Value, ApiError> {
     if q.trim().is_empty() {
         return Err(ApiError::bad_request("`q` (part of a name) is required"));
@@ -44,7 +52,7 @@ pub fn get_proposal(st: &Shared, agent: &str, id: &str) -> Result<Value, ApiErro
         links.push(json!({"id": r.id, "type": r.rel_type, "a": r.person_a, "b": r.person_b, "kind": r.kind, "subtype": r.subtype, "status": r.status}));
     }
     let changes: Vec<Value> =
-        store.changes_of(&CTX, id)?.into_iter().map(|c| json!({"id": c.id, "target_type": c.target_type, "target_id": c.target_id, "op": c.op, "patch": c.patch, "status": c.status})).collect();
+        store.changes_of(&CTX, id)?.into_iter().map(|c| json!({"id": c.id, "target_type": c.target_type, "target_id": c.target_id, "op": c.op, "patch": agent_patch(&c.patch), "status": c.status})).collect();
     Ok(json!({
         "id": p.id, "summary": p.summary, "status": if p.withdrawn { "withdrawn" } else { p.status.as_str() },
         "created_at": p.created_at, "decided_at": p.decided_at, "rejection_note": p.decision_note,
@@ -124,7 +132,7 @@ pub fn list_my_proposals(st: &Shared, agent: &str) -> Result<Value, ApiError> {
         let corrections: Vec<Value> = store
             .reviewer_edits(&p.id)?
             .into_iter()
-            .map(|e| json!({"kind": e["kind"], "target_id": e["target_id"], "field": e["field"], "you_proposed": e["original"], "approved_as": e["current"], "note": e["note"]}))
+            .map(|e| json!({"kind": e["kind"], "target_id": e["target_id"], "field": e["field"], "you_proposed": query::agent_value(e["field"].as_str().unwrap_or(""), &e["original"]), "approved_as": query::agent_value(e["field"].as_str().unwrap_or(""), &e["current"]), "note": e["note"]}))
             .collect();
         out.push(json!({"id": p.id, "summary": p.summary, "status": if p.withdrawn { "withdrawn" } else { p.status.as_str() }, "created_at": p.created_at, "decided_at": p.decided_at, "rejection_note": p.decision_note, "reviewer_corrections": corrections, "changes": changes}));
     }

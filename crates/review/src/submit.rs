@@ -534,10 +534,25 @@ pub fn submit(store: &mut Store, agent: &str, body: &Value) -> Result<SubmitResu
                 errs.add(&fp, "wrong_type", "must be exactly {\"from\": <value you saw>, \"to\": <new value>}");
                 continue;
             }
-            let (from, to) = (norm(&ft["from"]), norm(&ft["to"]));
+            let (mut from, mut to) = (norm(&ft["from"]), norm(&ft["to"]));
+            if f == "sex" {
+                // One vocabulary for agents: they read words, the store keeps codes, and either is accepted here.
+                if let Some(x) = from.as_str().and_then(|t| crate::query::parse_sex(t).ok()) {
+                    from = Value::from(x.as_str());
+                }
+                match to.as_str().map(crate::query::parse_sex) {
+                    Some(Ok(x)) => to = Value::from(x.as_str()),
+                    Some(Err(m)) => {
+                        errs.add(format!("{fp}.to"), "invalid_value", m);
+                        continue;
+                    }
+                    None => {}
+                }
+            }
             let cur = norm(&current(f));
             if from != cur {
-                errs.add(format!("{fp}.from"), "stale_from", format!("the current value is {cur}, not {from}; read the record again before proposing"));
+                let (shown_cur, shown_from) = (crate::query::agent_value(f, &cur), crate::query::agent_value(f, &from));
+                errs.add(format!("{fp}.from"), "stale_from", format!("the current value is {shown_cur}, not {shown_from}; read the record again before proposing"));
                 continue;
             }
             if let Err(m) = check_to(f, rel_type, &to) {

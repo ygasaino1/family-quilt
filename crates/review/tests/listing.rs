@@ -31,7 +31,7 @@ fn sex_filter_accepts_words_and_codes_and_rejects_the_rest() {
     }
     assert_eq!((total(&s, "unknown"), total(&s, "X"), total(&s, "other")), (1, 0, 0));
     let echoed = list_people(&s, &opts(|o| o.sex = Some("female".into()))).unwrap();
-    assert_eq!(echoed["filters"]["sex"], "F");
+    assert_eq!(echoed["filters"]["sex"], "female");
     for bad in ["banana", "woman", "2"] {
         let e = list_people(&s, &opts(|o| o.sex = Some(bad.into()))).unwrap_err().to_string();
         assert!(e.contains("male, female, other, unknown"), "{e}");
@@ -69,7 +69,7 @@ fn projection_columns_groups_and_version() {
     assert!(list_people(&s, &opts(|o| o.fields = Some(vec!["nope".into()]))).is_err());
 
     let g: Value = list_people(&s, &opts(|o| o.group_by = Some("sex".into()))).unwrap();
-    assert_eq!((g["groups"]["F"].as_u64(), g["groups"]["M"].as_u64(), g["total"].as_u64()), (Some(1), Some(1), Some(2)));
+    assert_eq!((g["groups"]["female"].as_u64(), g["groups"]["male"].as_u64(), g["total"].as_u64()), (Some(1), Some(1), Some(2)));
     assert!(g.get("people").is_none());
     assert!(list_people(&s, &opts(|o| o.group_by = Some("birth".into()))).is_err());
     let _ = a;

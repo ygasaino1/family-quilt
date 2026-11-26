@@ -5,6 +5,7 @@
 //! under the key `note`.
 
 use crate::fields::norm;
+use crate::query::agent_value;
 use crate::Result;
 use family_store::{AccessContext, Store};
 use serde_json::{json, Map, Value};
@@ -53,7 +54,7 @@ fn diff(store: &Store, before: &Value, after: &Value) -> Vec<Value> {
             continue;
         }
         let field = k.strip_suffix("_id").filter(|_| k.ends_with("_place_id")).map(|_| k.replace("_place_id", "_place")).unwrap_or_else(|| k.clone());
-        out.push(json!({"field": field, "from": column(store, before, k), "to": column(store, after, k)}));
+        out.push(json!({"field": field, "from": agent_value(&field, &column(store, before, k)), "to": agent_value(&field, &column(store, after, k))}));
     }
     out
 }
@@ -118,7 +119,7 @@ fn events_for(store: &Store, target_type: &str, id: &str, events: &mut Vec<Event
                     events,
                     &at,
                     with(
-                        json!({"who": {"type": "user"}, "event": "corrected", "proposal_id": pid, "changes": [{"field": e["field"], "from": e["original"], "to": e["current"]}], "note": note_of(e["note"].as_str()), "at": at}),
+                        json!({"who": {"type": "user"}, "event": "corrected", "proposal_id": pid, "changes": [{"field": e["field"], "from": agent_value(e["field"].as_str().unwrap_or(""), &e["original"]), "to": agent_value(e["field"].as_str().unwrap_or(""), &e["current"])}], "note": note_of(e["note"].as_str()), "at": at}),
                     ),
                 );
             }
@@ -150,9 +151,9 @@ fn events_for(store: &Store, target_type: &str, id: &str, events: &mut Vec<Event
         if let Some(o) = c.patch.as_object() {
             for (f, ft) in o {
                 let corrected = edits.iter().find(|e| e["kind"] == "change" && e["target_id"] == c.id && e["field"] == *f);
-                let mut ch = json!({"field": f, "from": norm(&ft["from"]), "to": norm(&ft["to"])});
+                let mut ch = json!({"field": f, "from": agent_value(f, &norm(&ft["from"])), "to": agent_value(f, &norm(&ft["to"]))});
                 if let Some(e) = corrected {
-                    ch["agent_proposed"] = e["original"].clone();
+                    ch["agent_proposed"] = agent_value(f, &e["original"]);
                 }
                 changes.push(ch);
             }
