@@ -19,6 +19,31 @@ pub const MAX_RELATIONSHIPS: usize = 400;
 pub const MAX_CHANGES: usize = 200;
 pub const MAX_OPEN_PROPOSALS_PER_AGENT: usize = 50;
 
+/// The keys each object of a proposal may have. The MCP tool's published schema is checked against these in a test,
+/// so what agents are told and what the validator accepts cannot drift apart (a key here is also allowed to carry
+/// `calendar`, which is handled before validation).
+pub const TOP_KEYS: &[&str] = &["summary", "source_text", "people", "relationships", "changes", "acknowledge_rejected", "replaces"];
+pub const PERSON_KEYS: &[&str] = &[
+    "ref",
+    "given_name",
+    "family_name",
+    "full_name",
+    "sex",
+    "birth_date",
+    "birth_qualifier",
+    "birth_place",
+    "death_date",
+    "death_qualifier",
+    "death_place",
+    "is_living",
+    "note",
+    "agent_note",
+    "other_names",
+];
+pub const NAME_KEYS: &[&str] = &["given_name", "family_name", "full_name", "name_type", "script"];
+pub const REL_KEYS: &[&str] = &["type", "a", "b", "kind", "subtype", "start_date", "end_date", "place", "note", "agent_note"];
+pub const CHANGE_KEYS: &[&str] = &["target_type", "target_id", "op", "fields", "base_updated_at", "agent_note"];
+
 #[derive(Debug, Serialize)]
 pub struct SubmitResult {
     pub proposal_id: String,
@@ -187,7 +212,7 @@ pub fn submit(store: &mut Store, agent: &str, body: &Value) -> Result<SubmitResu
     let Some(top) = as_obj(body, "$", &mut errs) else {
         return Err(ReviewError::Invalid(errs.0));
     };
-    unknown_keys(top, "$", &["summary", "source_text", "people", "relationships", "changes", "acknowledge_rejected", "replaces"], &mut errs);
+    unknown_keys(top, "$", TOP_KEYS, &mut errs);
     let summary = opt_str(top, "summary", "$", 300, &mut errs);
     if summary.is_none() {
         errs.add("$.summary", "required", "a short summary of the request is required (what the user asked for)");
@@ -233,28 +258,7 @@ pub fn submit(store: &mut Store, agent: &str, body: &Value) -> Result<SubmitResu
     for (i, pv) in people_in.iter().enumerate() {
         let path = format!("$.people[{i}]");
         let Some(o) = as_obj(pv, &path, &mut errs) else { continue };
-        unknown_keys(
-            o,
-            &path,
-            &[
-                "ref",
-                "given_name",
-                "family_name",
-                "full_name",
-                "sex",
-                "birth_date",
-                "birth_qualifier",
-                "birth_place",
-                "death_date",
-                "death_qualifier",
-                "death_place",
-                "is_living",
-                "note",
-                "agent_note",
-                "other_names",
-            ],
-            &mut errs,
-        );
+        unknown_keys(o, &path, PERSON_KEYS, &mut errs);
         let ref_ = opt_str(o, "ref", &path, 40, &mut errs);
         match &ref_ {
             None => errs.add(format!("{path}.ref"), "required", "every new person needs a `ref` (any short label) so links can point to it"),
@@ -294,7 +298,7 @@ pub fn submit(store: &mut Store, agent: &str, body: &Value) -> Result<SubmitResu
                 for (j, nv) in a.iter().enumerate() {
                     let np = format!("{path}.other_names[{j}]");
                     if let Some(no) = as_obj(nv, &np, &mut errs) {
-                        unknown_keys(no, &np, &["given_name", "family_name", "full_name", "name_type", "script"], &mut errs);
+                        unknown_keys(no, &np, NAME_KEYS, &mut errs);
                         if let Some(n) = parse_name(no, &np, &mut errs) {
                             names.push(n);
                         }
@@ -323,7 +327,7 @@ pub fn submit(store: &mut Store, agent: &str, body: &Value) -> Result<SubmitResu
     for (i, rv) in rels_in.iter().enumerate() {
         let path = format!("$.relationships[{i}]");
         let Some(o) = as_obj(rv, &path, &mut errs) else { continue };
-        unknown_keys(o, &path, &["type", "a", "b", "kind", "subtype", "start_date", "end_date", "place", "note", "agent_note"], &mut errs);
+        unknown_keys(o, &path, REL_KEYS, &mut errs);
         let rel_type = match opt_str(o, "type", &path, 20, &mut errs) {
             Some(t) => match RelType::parse(&t) {
                 Ok(t) => Some(t),
@@ -428,7 +432,7 @@ pub fn submit(store: &mut Store, agent: &str, body: &Value) -> Result<SubmitResu
     for (i, cv) in changes_in.iter().enumerate() {
         let path = format!("$.changes[{i}]");
         let Some(o) = as_obj(cv, &path, &mut errs) else { continue };
-        unknown_keys(o, &path, &["target_type", "target_id", "op", "fields", "base_updated_at", "agent_note"], &mut errs);
+        unknown_keys(o, &path, CHANGE_KEYS, &mut errs);
         let target_type = opt_str(o, "target_type", &path, 20, &mut errs);
         let target_id = opt_str(o, "target_id", &path, 80, &mut errs);
         let op = opt_str(o, "op", &path, 10, &mut errs);

@@ -11,10 +11,7 @@ const CTX: AccessContext = AccessContext::Everything;
 
 fn kim() -> (Store, String) {
     let mut s = Store::open_in_memory().unwrap();
-    let id = s
-        .create_person(&CTX, NewPerson { sex: Sex::Female, names: vec![NewName::full("Kim Tester")], ..Default::default() }, &Origin::human())
-        .unwrap()
-        .id;
+    let id = s.create_person(&CTX, NewPerson { sex: Sex::Female, names: vec![NewName::full("Kim Tester")], ..Default::default() }, &Origin::human()).unwrap().id;
     (s, id)
 }
 

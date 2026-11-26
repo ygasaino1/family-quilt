@@ -30,6 +30,107 @@ async fn method_not_allowed() -> Response {
 
 const SEARCH_FIRST: &str = "Always search before proposing, to avoid duplicates. Nothing is final until the user approves it in the app.";
 
+/// A string property with a description and a length limit.
+fn text(desc: &str, max: u64) -> Value {
+    json!({"type": "string", "maxLength": max, "description": desc})
+}
+
+const SEXES: [&str; 4] = ["male", "female", "other", "unknown"];
+const QUALIFIERS: [&str; 4] = ["exact", "about", "before", "after"];
+const CALENDARS: [&str; 2] = ["gregorian", "jalali"];
+const DATE: &str = "YYYY, YYYY-MM or YYYY-MM-DD";
+
+fn calendar(of: &str) -> Value {
+    json!({"type": "string", "enum": CALENDARS, "description": format!("Calendar of {of} (default gregorian). Send Jalali dates exactly as the user gave them; the server converts.")})
+}
+
+fn name_properties() -> Value {
+    json!({
+        "given_name": text("First/given name", 300),
+        "family_name": text("Family name", 300),
+        "full_name": text("The whole name as written, when it does not split into given and family", 300),
+        "name_type": {"type": "string", "enum": ["birth", "married", "alias", "religious", "other"], "description": "Default birth for the first name"},
+        "script": text("Script of the name when not Latin, e.g. Arab, Cyrl", 40)
+    })
+}
+
+/// The complete shape of a proposal. `family_review::submit::{TOP,PERSON,NAME,REL,CHANGE}_KEYS` list what the server
+/// accepts and a test keeps this schema and those lists identical, so a client that checks arguments against the
+/// schema never drops a field the server needs.
+pub fn create_proposal_schema() -> Value {
+    let mut person_props = name_properties();
+    if let Some(o) = person_props.as_object_mut() {
+        o.remove("name_type");
+        o.remove("script");
+        o.insert("ref".into(), text("Required. Any short label, unique within this proposal; relationships and other people point to it", 40));
+        o.insert("sex".into(), json!({"type": "string", "enum": SEXES, "description": "Default unknown"}));
+        o.insert("birth_date".into(), text(DATE, 10));
+        o.insert("birth_qualifier".into(), json!({"type": "string", "enum": QUALIFIERS, "description": "How sure the birth date is (default exact)"}));
+        o.insert("birth_place".into(), text("Place of birth as the user said it", 300));
+        o.insert("death_date".into(), text(DATE, 10));
+        o.insert("death_qualifier".into(), json!({"type": "string", "enum": QUALIFIERS, "description": "How sure the death date is (default exact)"}));
+        o.insert("death_place".into(), text("Place of death as the user said it", 300));
+        o.insert("is_living".into(), json!({"type": "boolean", "description": "Omit when unknown. Cannot be true with a death date"}));
+        o.insert("note".into(), text("Free-text note kept on the person", 20000));
+        o.insert("agent_note".into(), text("Where this came from and how sure you are; shown to the reviewer", 1000));
+        o.insert(
+            "other_names".into(),
+            json!({"type": "array", "description": "More names of the same person (married name, alias, other script)", "items": {"type": "object", "properties": name_properties(), "additionalProperties": false}}),
+        );
+        o.insert("calendar".into(), calendar("this person's dates"));
+    }
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["summary"],
+        "properties": {
+            "summary": text("What the user asked for, in one line", 300),
+            "source_text": text("The user's own words", 5000),
+            "people": {
+                "type": "array", "maxItems": 200,
+                "description": "New people. Give each a `ref` and at least one of full_name, given_name, family_name",
+                "items": {"type": "object", "required": ["ref"], "additionalProperties": false, "properties": person_props}
+            },
+            "relationships": {
+                "type": "array", "maxItems": 400,
+                "description": "New links between people (existing ids or refs of people in this proposal)",
+                "items": {"type": "object", "required": ["type", "a", "b"], "additionalProperties": false, "properties": {
+                    "type": {"type": "string", "enum": ["parent_child", "partnership"]},
+                    "a": text("An existing person id, or a `ref` from `people`. For parent_child this is the PARENT", 80),
+                    "b": text("An existing person id, or a `ref` from `people`. For parent_child this is the CHILD", 80),
+                    "kind": {"type": "string", "enum": ["birth", "adopted", "foster", "step", "guardian", "sealing", "unknown"], "description": "parent_child only; default birth. adopted ONLY if the user says so; unknown when unsure"},
+                    "subtype": {"type": "string", "enum": ["married", "unmarried", "divorced", "ended", "unknown"], "description": "partnership only"},
+                    "start_date": text(DATE, 10),
+                    "end_date": text(DATE, 10),
+                    "place": text("Where it began, e.g. the wedding", 300),
+                    "note": text("Free-text note kept on the link", 20000),
+                    "agent_note": text("Where this came from and how sure you are; shown to the reviewer", 1000),
+                    "calendar": calendar("start_date and end_date")
+                }}
+            },
+            "changes": {
+                "type": "array", "maxItems": 200,
+                "description": "Corrections to existing records. Read the record first and send the values you read as `from`",
+                "items": {"type": "object", "required": ["target_type", "target_id", "op"], "additionalProperties": false, "properties": {
+                    "target_type": {"type": "string", "enum": ["person", "person_name", "relationship"]},
+                    "target_id": text("Id of the person, name record or link, as you read it", 80),
+                    "op": {"type": "string", "enum": ["update", "remove"], "description": "remove only when the user explicitly asks; it needs the user's explicit tick and is undoable"},
+                    "fields": {
+                        "type": "object",
+                        "description": "For update: {\"<field>\": {\"from\": <value you read>, \"to\": <new value>}}, null clears. Fields: person: sex, is_living, birth_date, birth_qualifier, birth_place, death_date, death_qualifier, death_place, note; person_name: name_type, given, family, full_name, script; parent_child link: kind, start_date, end_date, place, note; partnership: subtype, start_date, end_date, place, note",
+                        "additionalProperties": {"type": "object", "required": ["from", "to"], "additionalProperties": false, "properties": {"from": {}, "to": {}}}
+                    },
+                    "base_updated_at": text("The record's updated_at as you read it; the change is refused if it moved since", 40),
+                    "agent_note": text("Why you propose this change", 1000),
+                    "calendar": calendar("the new (`to`) date values; `from` values are always as you read them")
+                }}
+            },
+            "replaces": text("Id of one of YOUR OWN pending proposals that this one replaces: the old one is withdrawn and this takes its place (it must not refer to people the old one added)", 80),
+            "acknowledge_rejected": {"type": "array", "items": {"type": "string"}, "description": "Ids of rejected proposals this one repeats on purpose after changing it because of the user's reason"}
+        }
+    })
+}
+
 /// The tool list. The bridge answers `tools/list` from this too, without needing the app.
 pub fn tool_definitions() -> Value {
     json!([
@@ -91,16 +192,8 @@ pub fn tool_definitions() -> Value {
       },
       {
         "name": "create_proposal",
-        "description": format!("Propose new people, links, and corrections to existing records. {SEARCH_FIRST} Read the guide resource (family-quilt://guide) for the exact shape. Link `kind`: birth (default; only birth counts as blood), adopted (ONLY if the user says adopted), foster, step, guardian, sealing, unknown (use when unsure, and explain in agent_note). Dates: YYYY, YYYY-MM or YYYY-MM-DD with an optional qualifier (exact|about|before|after). Dates are Gregorian unless the person, relationship or change has `\"calendar\": \"jalali\"` (supported: gregorian, jalali): then send the date exactly as the user gave it and do NOT convert it yourself; the server converts it and reports `date_conversions`. To edit an existing record give `changes` with from/to values you just read; propose the smallest change and say why in agent_note. You may propose removing a person or a link only when the user explicitly asks (it needs the user's explicit tick and is undoable); merging people is not possible. Do not assume anything was applied until the user approves."),
-        "inputSchema": {"type": "object", "properties": {
-            "summary": {"type": "string", "description": "What the user asked for, in one line"},
-            "source_text": {"type": "string", "description": "The user's own words"},
-            "people": {"type": "array", "items": {"type": "object", "properties": {"sex": {"type": "string", "enum": ["M", "F", "X", "U"], "description": "male, female, other, unknown also work"}, "birth_qualifier": {"type": "string", "enum": ["exact", "about", "before", "after"]}, "death_qualifier": {"type": "string", "enum": ["exact", "about", "before", "after"]}, "calendar": {"type": "string", "enum": ["gregorian", "jalali"], "description": "Calendar of this person's dates (default gregorian). Send Jalali dates as given; the server converts."}}}},
-            "relationships": {"type": "array", "items": {"type": "object", "properties": {"type": {"type": "string", "enum": ["parent_child", "partnership"]}, "kind": {"type": "string", "enum": ["birth", "adopted", "foster", "step", "guardian", "sealing", "unknown"], "description": "parent_child only"}, "subtype": {"type": "string", "enum": ["married", "unmarried", "divorced", "ended", "unknown"], "description": "partnership only"}, "calendar": {"type": "string", "enum": ["gregorian", "jalali"], "description": "Calendar of start_date and end_date (default gregorian)"}}}},
-            "changes": {"type": "array", "items": {"type": "object", "properties": {"calendar": {"type": "string", "enum": ["gregorian", "jalali"], "description": "Calendar of the new (`to`) date values; `from` values are always as you read them"}}}},
-            "replaces": {"type": "string", "description": "id of one of YOUR OWN pending proposals that this one replaces: the old one is withdrawn and this takes its place (it must not refer to people the old one added)"},
-            "acknowledge_rejected": {"type": "array", "items": {"type": "string"}, "description": "ids of rejected proposals this one repeats on purpose after changing it because of the user's reason"}
-        }, "required": ["summary"]}
+        "description": format!("Propose new people, links, and corrections to existing records. {SEARCH_FIRST} The input schema is the full shape (the guide resource, family-quilt://guide, has worked examples). Link `kind`: birth (default; only birth counts as blood), adopted (ONLY if the user says adopted), foster, step, guardian, sealing, unknown (use when unsure, and explain in agent_note). Dates: YYYY, YYYY-MM or YYYY-MM-DD with an optional qualifier (exact|about|before|after). Dates are Gregorian unless the person, relationship or change has `\"calendar\": \"jalali\"` (supported: gregorian, jalali): then send the date exactly as the user gave it and do NOT convert it yourself; the server converts it and reports `date_conversions`. To edit an existing record give `changes` with from/to values you just read; propose the smallest change and say why in agent_note. You may propose removing a person or a link only when the user explicitly asks (it needs the user's explicit tick and is undoable); merging people is not possible. Do not assume anything was applied until the user approves."),
+        "inputSchema": create_proposal_schema()
       },
       {
         "name": "list_my_proposals",
@@ -287,4 +380,100 @@ async fn handle(State(st): State<Shared>, Extension(agent): Extension<AgentName>
         resp.headers_mut().insert(k, v);
     }
     resp
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+    use family_review::submit::{CHANGE_KEYS, NAME_KEYS, PERSON_KEYS, REL_KEYS, TOP_KEYS};
+    use std::collections::BTreeSet;
+
+    fn keys(v: &Value) -> BTreeSet<String> {
+        v["properties"].as_object().expect("an object schema with properties").keys().cloned().collect()
+    }
+    fn expect(list: &[&str], with_calendar: bool) -> BTreeSet<String> {
+        let mut s: BTreeSet<String> = list.iter().map(|k| k.to_string()).collect();
+        if with_calendar {
+            s.insert("calendar".into());
+        }
+        s
+    }
+    fn required(v: &Value) -> BTreeSet<String> {
+        v["required"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default()
+    }
+
+    /// The published schema lists exactly the keys the server's validator accepts, at every level.
+    #[test]
+    fn create_proposal_schema_matches_what_the_server_accepts() {
+        let s = create_proposal_schema();
+        assert_eq!(keys(&s), expect(TOP_KEYS, false));
+        let person = &s["properties"]["people"]["items"];
+        assert_eq!(keys(person), expect(PERSON_KEYS, true));
+        assert_eq!(keys(&person["properties"]["other_names"]["items"]), expect(NAME_KEYS, false));
+        assert_eq!(keys(&s["properties"]["relationships"]["items"]), expect(REL_KEYS, true));
+        assert_eq!(keys(&s["properties"]["changes"]["items"]), expect(CHANGE_KEYS, true));
+    }
+
+    /// What the server insists on is marked required, so a client that prunes to the schema keeps it.
+    #[test]
+    fn create_proposal_schema_marks_the_required_fields() {
+        let s = create_proposal_schema();
+        let set = |a: &[&str]| a.iter().map(|k| k.to_string()).collect::<BTreeSet<_>>();
+        assert_eq!(required(&s), set(&["summary"]));
+        assert_eq!(required(&s["properties"]["people"]["items"]), set(&["ref"]));
+        assert_eq!(required(&s["properties"]["relationships"]["items"]), set(&["type", "a", "b"]));
+        assert_eq!(required(&s["properties"]["changes"]["items"]), set(&["target_type", "target_id", "op"]));
+    }
+
+    /// No object in the schema allows keys the server would reject as `unknown_field`.
+    #[test]
+    fn every_object_in_the_schema_is_closed() {
+        fn walk(v: &Value, at: &str, bad: &mut Vec<String>) {
+            if let Some(o) = v.as_object() {
+                if o.get("type") == Some(&json!("object")) && o.contains_key("properties") && o.get("additionalProperties") != Some(&json!(false)) {
+                    bad.push(at.to_string());
+                }
+                for (k, x) in o {
+                    walk(x, &format!("{at}.{k}"), bad);
+                }
+            } else if let Some(a) = v.as_array() {
+                for (i, x) in a.iter().enumerate() {
+                    walk(x, &format!("{at}[{i}]"), bad);
+                }
+            }
+        }
+        let mut bad = vec![];
+        walk(&create_proposal_schema(), "$", &mut bad);
+        assert!(bad.is_empty(), "open objects: {bad:?}");
+    }
+
+    /// Every value the schema offers is one the server accepts.
+    #[test]
+    fn every_enum_value_in_the_schema_is_accepted_by_the_server() {
+        let s = create_proposal_schema();
+        let person = &s["properties"]["people"]["items"]["properties"];
+        let rel = &s["properties"]["relationships"]["items"]["properties"];
+        let vals = |v: &Value| -> Vec<String> { v["enum"].as_array().unwrap().iter().map(|x| x.as_str().unwrap().to_string()).collect() };
+        for v in vals(&person["sex"]) {
+            assert!(family_review::query::parse_sex(&v).is_ok(), "sex {v}");
+        }
+        for v in vals(&person["birth_qualifier"]).into_iter().chain(vals(&person["death_qualifier"])) {
+            assert!(family_store::Qualifier::parse(&v).is_ok(), "qualifier {v}");
+        }
+        for v in vals(&person["other_names"]["items"]["properties"]["name_type"]) {
+            assert!(family_store::NameType::parse(&v).is_ok(), "name_type {v}");
+        }
+        for v in vals(&rel["kind"]) {
+            assert!(family_store::LinkKind::parse(&v).is_ok(), "kind {v}");
+        }
+        for v in vals(&rel["subtype"]) {
+            assert!(family_store::PartnershipState::parse(&v).is_ok(), "subtype {v}");
+        }
+        for v in vals(&rel["type"]) {
+            assert!(family_store::RelType::parse(&v).is_ok(), "type {v}");
+        }
+        for v in vals(&person["calendar"]) {
+            assert!(["gregorian", "jalali"].contains(&v.as_str()), "calendar {v}");
+        }
+    }
 }

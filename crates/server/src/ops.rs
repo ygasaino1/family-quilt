@@ -51,8 +51,11 @@ pub fn get_proposal(st: &Shared, agent: &str, id: &str) -> Result<Value, ApiErro
         let r = store.get_relationship(&CTX, &lid)?;
         links.push(json!({"id": r.id, "type": r.rel_type, "a": r.person_a, "b": r.person_b, "kind": r.kind, "subtype": r.subtype, "status": r.status}));
     }
-    let changes: Vec<Value> =
-        store.changes_of(&CTX, id)?.into_iter().map(|c| json!({"id": c.id, "target_type": c.target_type, "target_id": c.target_id, "op": c.op, "patch": agent_patch(&c.patch), "status": c.status})).collect();
+    let changes: Vec<Value> = store
+        .changes_of(&CTX, id)?
+        .into_iter()
+        .map(|c| json!({"id": c.id, "target_type": c.target_type, "target_id": c.target_id, "op": c.op, "patch": agent_patch(&c.patch), "status": c.status}))
+        .collect();
     Ok(json!({
         "id": p.id, "summary": p.summary, "status": if p.withdrawn { "withdrawn" } else { p.status.as_str() },
         "created_at": p.created_at, "decided_at": p.decided_at, "rejection_note": p.decision_note,
