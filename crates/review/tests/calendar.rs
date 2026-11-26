@@ -59,5 +59,5 @@ fn unsupported_calendars_and_impossible_dates_are_field_errors() {
     assert_eq!(e[0].0, "$.people[0].birth_date");
     assert!(e[0].1.contains("29 days"), "{}", e[0].1);
     // Nothing was written.
-    assert!(s.search_people(&CTX, &SearchQuery { text: "a".into(), status: None, limit: 10 }).unwrap().is_empty());
+    assert!(s.search_people(&CTX, &SearchQuery { text: "a".into(), status: None, limit: 10, ..Default::default() }).unwrap().is_empty());
 }

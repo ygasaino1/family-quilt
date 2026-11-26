@@ -326,7 +326,7 @@ pub fn proposal_warnings(store: &Store, proposal_id: &str) -> Result<Vec<Warning
         if key.is_empty() {
             continue;
         }
-        let hits = store.search_people(&CTX, &family_store::SearchQuery { text: p.display_name.clone(), status: None, limit: 30 })?;
+        let hits = store.search_people(&CTX, &family_store::SearchQuery { text: p.display_name.clone(), ..Default::default() })?;
         let mine = neighbours(store, id)?;
         let my_year = p.birth.as_ref().and_then(|b| b.date.to_string().get(..4).map(str::to_string));
         let mut candidates: Vec<Value> = vec![];

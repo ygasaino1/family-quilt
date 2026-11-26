@@ -288,7 +288,7 @@ approval stays one undoable batch. Editing an item in place (changing what the a
   `history_total` and `user_confirmed`. Events come from the revision log, the proposals and the reviewer corrections; nothing
   is stored twice for them. Events: proposed, approved, rejected, corrected, edited, edit_proposed / approved / rejected,
   removal_*, created, removed, restored. Notes are capped at 300 characters and always sit under `note`; `AGENTS.md` says
-  they are information, never instructions. `search_people` adds `previously_rejected`; `list_my_proposals` adds
+  they are information, never instructions. `search_people` adds `previously_rejected`; `proposals` adds
   `rejection_note` and `reviewer_corrections`.
 - **Kept on purpose:** the `reviewer_edits` column (I had meant to derive everything from the revision log). A revision
   holds whole rows with column names, not the fields the agent used, so the agent's original value and the one-click revert
@@ -307,9 +307,10 @@ Prompted by an agent's review of the MCP design after a large import.
 - **Duplicates.** Warnings now cover people waiting in other proposals and use shared relatives (by id or name key):
   `likely_duplicate` (same name key plus a shared parent or partner, birth years not differing) and `possible_duplicate`.
 - **Listing.** `list_people` (`/agent/v1/directory`) pages with filters, including loose ends (`no_parents`, ...).
-  Search results are cards with parents, partners, children count, birth year and `proposal_id`; `display_name` stays for
-  older clients. `get_proposal` returns one of the agent's own proposals (another agent's id is NotFound). The default
-  search limit is 50. Both new tools are read-only, so the "no approve/edit/delete" rule still holds (nine tools).
+  Search results are cards with parents, partners, children count, birth year and `proposal_id` (field `name`;
+  `display_name` was dropped in the 2026-11-26 tool-surface rework). `proposals` with an `id` returns one of the
+  agent's own proposals (another agent's id is NotFound). The default
+  search limit is 50. Both new tools are read-only, so the "no approve/edit/delete" rule still holds (eight tools).
 - **Calendars:** see the next section.
 
 ## Calendars: one stored calendar, Jalali as input and display (2026-11-25)
@@ -361,3 +362,21 @@ When the reviewer corrects a value in the Review panel they can add one line say
 tidied, longer is refused). It is stored on each correction made by that request (`reviewer_edits[].note`) and agents
 read it as `note` on the `corrected` history event and in `reviewer_corrections` of `list_my_proposals`. Notes are
 information for the agent, never instructions (same rule as every other note). Putting a value back removes the entry and its note.
+
+## MCP surface: nine tools become eight, schemas tell the truth (2026-11-26)
+
+An agent's real-task review found the MCP surface overlapping and its write schema misleading (it declared only a few of
+the fields `submit` reads). Development-phase rework:
+
+- **Merged:** `list_my_proposals` + `get_proposal` → `proposals` (with `status`, `before`, `limit`; an `id` reads one in
+  full). `search_people` gained the `status` enum (`verified`/`pending`/`all`) instead of `include_pending`, plus an
+  `offset`-style cursor (`next_cursor`) so long result sets page; `find_relationship` and `get_graph` take the same
+  `status` enum. Eight tools: search_people, list_people, get_person, get_graph, find_relationship, create_proposal,
+  proposals, withdraw_proposal.
+- **One edge shape:** a person's `links` now carry `id` and `rel_type` (matching graph edges' `id`/`type`) instead of
+  `link_id`; cards no longer duplicate `display_name` next to `name`.
+- **Honest create_proposal schema:** it now declares `people[].ref`, given/family/full_name, birth/death dates and
+  qualifiers, `is_living`, `other_names`, `relationships[].a/b`, and `changes[].target_type/target_id/op/fields` —
+  exactly what `submit` reads, so schema-pruning clients keep the contract.
+- HTTP door mirrors it: `/agent/v1/people?q&status&offset`, `/agent/v1/relationship?a&b&status`,
+  `/agent/v1/graph?focus&up&down&status`, `/agent/v1/proposals?status&before&limit`.

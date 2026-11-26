@@ -13,14 +13,15 @@ fn lock(st: &Shared) -> std::sync::MutexGuard<'_, family_store::Store> {
     st.store.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-pub fn search_people(st: &Shared, q: &str, limit: usize, pending: bool) -> Result<Value, ApiError> {
+pub fn search_people(st: &Shared, q: &str, limit: usize, status: &str, offset: usize) -> Result<Value, ApiError> {
     if q.trim().is_empty() {
         return Err(ApiError::bad_request("`q` (part of a name) is required"));
     }
     let store = lock(st);
-    let people = query::search_cards(&store, q, limit, pending)?;
+    let s = query::parse_status(status).map_err(|m| ApiError::bad_request(&m))?;
+    let (people, next_cursor) = query::search_page(&store, q, limit, s.is_none(), offset)?;
     let rejected = previously_rejected(&store, q);
-    Ok(json!({ "people": people, "includes_pending": pending, "previously_rejected": rejected, "tree_version": query::tree_version(&store)? }))
+    Ok(json!({ "people": people, "status": s.map_or("all", |x| x.as_str()), "next_cursor": next_cursor, "previously_rejected": rejected, "tree_version": query::tree_version(&store)? }))
 }
 
 /// Page through people with filters (the search needs a name; this does not).
@@ -35,7 +36,7 @@ pub fn get_proposal(st: &Shared, agent: &str, id: &str) -> Result<Value, ApiErro
     let p = store.get_proposal(&CTX, id)?;
     let mine = format!("agent:{}", family_review::clean_agent_name(agent));
     if p.created_by != mine {
-        return Err(ApiError::new(axum::http::StatusCode::NOT_FOUND, "not_found", "You have no proposal with that id (see list_my_proposals)."));
+        return Err(ApiError::new(axum::http::StatusCode::NOT_FOUND, "not_found", "You have no proposal with that id (see proposals)."));
     }
     let people: Vec<Value> = store.people_of_proposal(&CTX, id)?.iter().filter_map(|i| query::card(&store, i).ok()).collect();
     let mut links = vec![];
@@ -94,12 +95,17 @@ fn previously_rejected(store: &family_store::Store, q: &str) -> Vec<Value> {
     out
 }
 
-pub fn find_relationship(st: &Shared, a: &str, b: &str, pending: bool) -> Result<Value, ApiError> {
-    Ok(serde_json::to_value(query::relationship(&lock(st), a, b, pending, false)?).unwrap_or_default())
+pub fn find_relationship(st: &Shared, a: &str, b: &str, status: &str) -> Result<Value, ApiError> {
+    Ok(serde_json::to_value(query::relationship(&lock(st), a, b, pending_of(status)?, false)?).unwrap_or_default())
 }
 
-pub fn get_graph(st: &Shared, focus: &str, up: u32, down: u32, pending: bool) -> Result<Value, ApiError> {
-    Ok(query::neighbourhood(&lock(st), focus, up, down, pending)?)
+pub fn get_graph(st: &Shared, focus: &str, up: u32, down: u32, status: &str) -> Result<Value, ApiError> {
+    Ok(query::neighbourhood(&lock(st), focus, up, down, pending_of(status)?)?)
+}
+
+/// `verified` excludes unverified people and links; `pending`/`all` include them.
+fn pending_of(status: &str) -> Result<bool, ApiError> {
+    Ok(query::parse_status(status).map_err(|m| ApiError::bad_request(&m))?.is_none_or(|s| s != family_store::Status::Verified))
 }
 
 pub fn create_proposal(st: &Shared, agent: &str, body: &Value) -> Result<Value, ApiError> {
@@ -114,11 +120,26 @@ pub fn withdraw_proposal(st: &Shared, agent: &str, id: &str, reason: Option<&str
     Ok(json!({"id": id, "status": "withdrawn", "note": "Nothing of it will appear for review. It does not count as a rejection by the user.", "affected_proposals": r.affected_proposals}))
 }
 
-pub fn list_my_proposals(st: &Shared, agent: &str) -> Result<Value, ApiError> {
+/// The agent's own proposals, newest first, one page. `status` is `pending`, `decided`, `withdrawn` or `all`;
+/// `before` is the id of the last proposal of the previous page; `next_cursor` is `Null` on the last page.
+pub fn list_my_proposals(st: &Shared, agent: &str, status: &str, before: Option<&str>, limit: usize) -> Result<Value, ApiError> {
     let store = lock(st);
     let created_by = format!("agent:{}", family_review::clean_agent_name(agent));
+    let status = match status.trim().to_lowercase().as_str() {
+        "" | "all" => None,
+        "pending" => Some("pending"),
+        "decided" => Some("decided"),
+        "withdrawn" => Some("withdrawn"),
+        other => return Err(ApiError::bad_request(&format!("'{other}' is not a status: use one of pending, decided, withdrawn, all"))),
+    };
+    let limit = if limit == 0 { 20 } else { limit.min(100) };
+    let rows = store.proposals_page(&CTX, &created_by, before, limit + 1)?;
+    let next_cursor = rows.get(limit).map(|p| p.id.clone());
     let mut out = vec![];
-    for p in store.list_proposals(&CTX, None, Some(&created_by), 50)? {
+    for p in rows.into_iter().take(limit) {
+        if status.is_some() && status != Some(if p.withdrawn { "withdrawn" } else { p.status.as_str() }) {
+            continue;
+        }
         let changes: Vec<Value> =
             store.changes_of(&CTX, &p.id)?.into_iter().map(|c| json!({"id": c.id, "target_type": c.target_type, "target_id": c.target_id, "op": c.op, "status": c.status})).collect();
         let corrections: Vec<Value> = store
@@ -128,5 +149,5 @@ pub fn list_my_proposals(st: &Shared, agent: &str) -> Result<Value, ApiError> {
             .collect();
         out.push(json!({"id": p.id, "summary": p.summary, "status": if p.withdrawn { "withdrawn" } else { p.status.as_str() }, "created_at": p.created_at, "decided_at": p.decided_at, "rejection_note": p.decision_note, "reviewer_corrections": corrections, "changes": changes}));
     }
-    Ok(json!({ "proposals": out, "note": "`pending` = waiting for the user; nothing in a pending proposal is final." }))
+    Ok(json!({ "proposals": out, "next_cursor": next_cursor, "filters": {"status": status.unwrap_or("all"), "mine": true}, "note": "`pending` = waiting for the user; nothing in a pending proposal is final. Read one in full with `proposals` and its `id`." }))
 }

@@ -25,6 +25,8 @@ pub struct SearchQuery {
     pub status: Option<Status>,
     /// 0 = default (50). Capped at 1000.
     pub limit: usize,
+    /// Skip this many results of the same ordering (for paging).
+    pub offset: usize,
 }
 
 const PERSON_COLS: &str = "p.id, p.sex, p.is_living, p.birth_date, p.birth_qualifier, bp.id, bp.name, p.death_date, p.death_qualifier, dp.id, dp.name, p.note, p.status, p.proposal_id, p.created_by, p.agent_note, p.created_at, p.updated_at";
@@ -415,12 +417,12 @@ impl Store {
             "SELECT p.id, {DISPLAY_NAME}, p.sex, p.is_living, p.birth_date, p.birth_qualifier, p.death_date, p.death_qualifier, p.status
              FROM person p JOIN person_name n ON n.person_id = p.id AND n.deleted_at IS NULL
              WHERE p.deleted_at IS NULL AND p.merged_into IS NULL AND instr(n.search_key, ?1) > 0 AND (?2 IS NULL OR p.status = ?2) AND {}
-             GROUP BY p.id ORDER BY MIN(instr(n.search_key, ?1)), p.id LIMIT ?3",
+             GROUP BY p.id ORDER BY MIN(instr(n.search_key, ?1)), p.id LIMIT ?3 OFFSET ?4",
             ctx.row_filter("p")
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let status = q.status.map(|s| s.as_str());
-        let rows = stmt.query_map(params![key, status, limit], |r| {
+        let rows = stmt.query_map(params![key, status, limit, q.offset as i64], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,

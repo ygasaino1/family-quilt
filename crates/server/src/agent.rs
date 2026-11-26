@@ -47,12 +47,13 @@ async fn guide_reading() -> Response {
 struct PeopleQ {
     q: Option<String>,
     limit: Option<usize>,
-    pending: Option<u8>,
+    status: Option<String>,
+    offset: Option<usize>,
 }
 
 async fn people(State(st): State<Shared>, Extension(a): Extension<AgentName>, Query(q): Query<PeopleQ>) -> Result<Json<Value>, ApiError> {
     st.log_activity(name(&a), "searched people");
-    ops::search_people(&st, q.q.as_deref().unwrap_or(""), q.limit.unwrap_or(50), q.pending == Some(1)).map(Json)
+    ops::search_people(&st, q.q.as_deref().unwrap_or(""), q.limit.unwrap_or(50), q.status.as_deref().unwrap_or(""), q.offset.unwrap_or(0)).map(Json)
 }
 
 #[derive(Deserialize)]
@@ -120,13 +121,13 @@ async fn person(State(st): State<Shared>, Extension(a): Extension<AgentName>, Pa
 struct RelQ {
     a: Option<String>,
     b: Option<String>,
-    pending: Option<u8>,
+    status: Option<String>,
 }
 
 async fn relationship(State(st): State<Shared>, Extension(ag): Extension<AgentName>, Query(q): Query<RelQ>) -> Result<Json<Value>, ApiError> {
     st.log_activity(name(&ag), "asked for a relationship");
     let (Some(a), Some(b)) = (q.a, q.b) else { return Err(ApiError::bad_request("`a` and `b` (person ids) are required")) };
-    ops::find_relationship(&st, &a, &b, q.pending == Some(1)).map(Json)
+    ops::find_relationship(&st, &a, &b, q.status.as_deref().unwrap_or("")).map(Json)
 }
 
 #[derive(Deserialize)]
@@ -135,13 +136,13 @@ struct GraphQ {
     focus: Option<String>,
     up: Option<u32>,
     down: Option<u32>,
-    pending: Option<u8>,
+    status: Option<String>,
 }
 
 async fn graph(State(st): State<Shared>, Extension(a): Extension<AgentName>, Query(q): Query<GraphQ>) -> Result<Json<Value>, ApiError> {
     st.log_activity(name(&a), "read a graph");
     let Some(focus) = q.focus else { return Err(ApiError::bad_request("`focus` (a person id) is required")) };
-    ops::get_graph(&st, &focus, q.up.unwrap_or(2), q.down.unwrap_or(2), q.pending == Some(1)).map(Json)
+    ops::get_graph(&st, &focus, q.up.unwrap_or(2), q.down.unwrap_or(2), q.status.as_deref().unwrap_or("")).map(Json)
 }
 
 async fn create(State(st): State<Shared>, Extension(a): Extension<AgentName>, Json(body): Json<Value>) -> Result<(axum::http::StatusCode, Json<Value>), ApiError> {
@@ -160,6 +161,14 @@ async fn withdraw(State(st): State<Shared>, Extension(a): Extension<AgentName>, 
     ops::withdraw_proposal(&st, name(&a), &id, reason.as_deref()).map(Json)
 }
 
-async fn list(State(st): State<Shared>, Extension(a): Extension<AgentName>) -> Result<Json<Value>, ApiError> {
-    ops::list_my_proposals(&st, name(&a)).map(Json)
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProposalsQ {
+    status: Option<String>,
+    before: Option<String>,
+    limit: Option<usize>,
+}
+
+async fn list(State(st): State<Shared>, Extension(a): Extension<AgentName>, Query(q): Query<ProposalsQ>) -> Result<Json<Value>, ApiError> {
+    ops::list_my_proposals(&st, name(&a), q.status.as_deref().unwrap_or(""), q.before.as_deref(), q.limit.unwrap_or(0)).map(Json)
 }

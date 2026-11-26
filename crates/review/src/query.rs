@@ -3,16 +3,27 @@
 
 use crate::Result;
 use family_relate::{FindOptions, RelGraph};
-use family_store::{AccessContext, ChangeRow, Graph, GraphFilter, LinkKind, PartnershipState, Person, PersonSummary, RelType, Relationship, SearchQuery, Status, Store, StoreError};
+use family_store::{AccessContext, ChangeRow, Graph, GraphFilter, LinkKind, PartnershipState, Person, PersonSummary, RelType, SearchQuery, Status, Store, StoreError};
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::collections::{BTreeSet, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashSet};
 
 const CTX: AccessContext = AccessContext::Everything;
 
 pub fn search(store: &Store, text: &str, limit: usize, include_pending: bool) -> Result<Vec<PersonSummary>> {
     let status = if include_pending { None } else { Some(Status::Verified) };
-    Ok(store.search_people(&CTX, &SearchQuery { text: text.to_string(), status, limit })?)
+    Ok(store.search_people(&CTX, &SearchQuery { text: text.to_string(), status, limit, ..Default::default() })?)
+}
+
+/// `verified`, `pending` or `all` (the empty string is `verified`, the default). The one status
+/// vocabulary for every read tool.
+pub fn parse_status(s: &str) -> std::result::Result<std::option::Option<Status>, String> {
+    match s.trim().to_lowercase().as_str() {
+        "" | "verified" => Ok(Some(Status::Verified)),
+        "pending" => Ok(Some(Status::Pending)),
+        "all" => Ok(None),
+        other => Err(format!("'{other}' is not a status: use one of verified, pending, all")),
+    }
 }
 
 fn year_of(d: &Option<family_store::FuzzyDate>) -> Option<u16> {
@@ -35,11 +46,20 @@ pub fn card(store: &Store, id: &str) -> Result<Value> {
         }
     }
     Ok(json!({
-        "id": p.id, "name": p.display_name, "display_name": p.display_name, "sex": p.sex, "is_living": p.is_living,
+        "id": p.id, "name": p.display_name, "sex": p.sex, "is_living": p.is_living,
         "birth_year": year_of(&p.birth), "death_year": year_of(&p.death),
         "status": p.status, "proposal_id": p.proposal_id,
         "parents": parents, "partners": partners, "children_count": children,
     }))
+}
+
+/// Cards for one page of a name search. `next_cursor` is `Null` when this page is the last.
+pub fn search_page(store: &Store, text: &str, limit: usize, include_pending: bool, offset: usize) -> Result<(Vec<Value>, Value)> {
+    let status = if include_pending { None } else { Some(Status::Verified) };
+    let hits = store.search_people(&CTX, &SearchQuery { text: text.to_string(), status, limit, offset })?;
+    let cards = hits.iter().map(|s| card(store, &s.id)).collect::<Result<Vec<_>>>()?;
+    let next_cursor = if hits.len() == limit { json!(offset + limit) } else { Value::Null };
+    Ok((cards, next_cursor))
 }
 
 pub fn search_cards(store: &Store, text: &str, limit: usize, include_pending: bool) -> Result<Vec<Value>> {
@@ -90,10 +110,7 @@ fn bad(field: &str, msg: String) -> crate::ReviewError {
 /// Page through people. Filters combine with AND. Returns cards plus paging info, the filters that were
 /// applied (so an empty result is never ambiguous), and `tree_version`. Bad filter values are errors.
 pub fn list_people(store: &Store, o: &ListOpts) -> Result<Value> {
-    let status = if o.status.is_empty() { "verified" } else { o.status.as_str() };
-    if !["verified", "pending", "all"].contains(&status) {
-        return Err(bad("status", format!("'{status}' is not a status: use one of verified, pending, all")));
-    }
+    let status = parse_status(o.status.as_str()).map_err(|m| bad("status", m))?;
     let sex_filter = match o.sex.as_deref().filter(|s| !s.is_empty()) {
         Some(s) => Some(parse_sex(s).map_err(|m| bad("sex", m))?),
         None => None,
@@ -114,7 +131,8 @@ pub fn list_people(store: &Store, o: &ListOpts) -> Result<Value> {
             return Err(bad("group_by", format!("'{g}' cannot be grouped: use sex or status")));
         }
     }
-    let g = store.load_graph(&CTX, GraphFilter { include_pending: status != "verified" })?;
+    let include_pending = status.is_none() || status == Some(Status::Pending);
+    let g = store.load_graph(&CTX, GraphFilter { include_pending })?;
     let n = g.people.len();
     let (mut has_parent, mut has_child, mut has_partner) = (vec![false; n], vec![false; n], vec![false; n]);
     for l in &g.links {
@@ -137,7 +155,7 @@ pub fn list_people(store: &Store, o: &ListOpts) -> Result<Value> {
     let needle = o.name.as_deref().map(family_store::names::search_key).filter(|k| !k.is_empty());
     let mut hits: Vec<usize> = vec![];
     for (i, p) in g.people.iter().enumerate() {
-        if status == "pending" && p.status != Status::Pending {
+        if status.is_some_and(|st| p.status != st) {
             continue;
         }
         if o.no_parents && has_parent[i] || o.no_children && has_child[i] || o.no_partners && has_partner[i] {
@@ -157,7 +175,7 @@ pub fn list_people(store: &Store, o: &ListOpts) -> Result<Value> {
     hits.sort_by(|&a, &b| g.people[a].id.cmp(&g.people[b].id));
     let total = hits.len();
     let applied = json!({
-        "status": status, "name": o.name, "sex": sex_filter.map(|s| s.as_str()),
+        "status": status.map_or("all", |s| s.as_str()), "name": o.name, "sex": sex_filter.map(|s| s.as_str()),
         "no_parents": o.no_parents, "no_children": o.no_children, "no_partners": o.no_partners,
         "created_by_proposal": o.created_by_proposal,
     });
@@ -222,7 +240,10 @@ pub fn tree_version(store: &Store) -> Result<String> {
 
 #[derive(Debug, Serialize)]
 pub struct LinkedPerson {
-    pub link_id: String,
+    /// The relationship's id — the same `id` a graph edge carries.
+    pub id: String,
+    /// `parent_child` or `partnership` — the same `type` a graph edge carries.
+    pub rel_type: RelType,
     /// What the other person is to this one: `parent`, `child` or `partner`.
     pub role: &'static str,
     pub kind: Option<LinkKind>,
@@ -250,14 +271,14 @@ pub fn person_detail(store: &Store, id: &str) -> Result<PersonDetail> {
             (RelType::Partnership, a_is_me) => ("partner", if a_is_me { r.person_b.clone() } else { r.person_a.clone() }),
         };
         let other_name = store.get_person(&CTX, &other).map(|p| p.display_name).unwrap_or_default();
-        links.push(LinkedPerson { link_id: r.id, role, kind: r.kind, subtype: r.subtype, status: r.status, other_id: other, other_name });
+        links.push(LinkedPerson { id: r.id, rel_type: r.rel_type, role, kind: r.kind, subtype: r.subtype, status: r.status, other_id: other, other_name });
     }
     let mut suggested_changes = store.open_changes_for(&CTX, "person", id)?;
     for n in &person.names {
         suggested_changes.extend(store.open_changes_for(&CTX, "person_name", &n.id)?);
     }
     for l in &links {
-        suggested_changes.extend(store.open_changes_for(&CTX, "relationship", &l.link_id)?);
+        suggested_changes.extend(store.open_changes_for(&CTX, "relationship", &l.id)?);
     }
     Ok(PersonDetail { person, links, suggested_changes })
 }
@@ -418,16 +439,14 @@ pub fn neighbourhood(store: &Store, focus: &str, up: u32, down: u32, include_pen
         .iter()
         .map(|i| {
             let p = g.person(*i);
-            json!({"id": p.id, "name": p.display_name, "display_name": p.display_name, "sex": p.sex, "birth": p.birth, "death": p.death, "is_living": p.is_living, "status": p.status})
+            json!({"id": p.id, "name": p.display_name, "sex": p.sex, "birth": p.birth, "death": p.death, "is_living": p.is_living, "status": p.status})
         })
         .collect();
     let links: Vec<Value> = g
         .links
         .iter()
         .filter(|l| inc.contains(&l.a) && inc.contains(&l.b))
-        .map(|l| json!({"id": l.id, "type": l.rel_type, "a": g.person(l.a).id, "b": g.person(l.b).id, "kind": l.kind, "subtype": l.subtype, "pending": l.pending}))
+        .map(|l| json!({"id": l.id, "type": l.rel_type, "a": g.person(l.a).id, "b": g.person(l.b).id, "kind": l.kind, "subtype": l.subtype, "status": if l.pending { family_store::Status::Pending } else { family_store::Status::Verified }, "pending": l.pending}))
         .collect();
-    let _: VecDeque<u8> = VecDeque::new();
-    let _: Option<Relationship> = None;
     Ok(json!({"focus": focus, "people": people, "links": links, "truncated": truncated, "includes_pending": include_pending}))
 }

@@ -95,6 +95,13 @@ impl Store {
         Ok(rows)
     }
 
+    /// One page of `created_by`'s proposals, newest first, strictly older than the proposal id `before` when given.
+    pub fn proposals_page(&self, _ctx: &AccessContext, created_by: &str, before: Option<&str>, limit: usize) -> Result<Vec<ProposalRow>> {
+        let mut stmt = self.conn.prepare(&format!("SELECT {PROPOSAL_COLS} FROM proposal WHERE created_by = ?1 AND (?2 IS NULL OR id < ?2) ORDER BY id DESC LIMIT ?3"))?;
+        let rows = stmt.query_map(params![created_by, before, limit as i64], proposal_from)?.collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// A short token that changes whenever anything a quilt shows may have changed (any revision, any proposal or decision).
     pub fn data_key(&self, _ctx: &AccessContext) -> Result<String> {
         let (rev, prop, pending, decided): (Option<String>, Option<String>, i64, i64) = self.conn.query_row(
