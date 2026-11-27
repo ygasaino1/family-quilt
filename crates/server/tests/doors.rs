@@ -483,10 +483,10 @@ async fn a_proposal_that_is_not_yours_is_told_apart_from_one_that_does_not_exist
     assert!(ops::withdraw_proposal(&s.st, "Agent A", &pid, None).is_ok());
 }
 
-/// `status` is one word with the same three values on every read (verified, pending, all); the older `?pending=1`
-/// on the REST door still means all, and an explicit `status` wins over it.
+/// `status` is one word with the same three values on every read (verified, pending, all). The old `?pending=1`
+/// flag is gone (nothing depends on it yet) and is refused, not ignored.
 #[tokio::test(flavor = "multi_thread")]
-async fn status_is_one_word_on_every_read_and_the_old_pending_flag_still_works() {
+async fn status_is_one_word_on_every_read_and_the_old_pending_flag_is_refused() {
     use family_server::{mcp, ops};
     let s = start().await;
     let p = s.port;
@@ -499,8 +499,7 @@ async fn status_is_one_word_on_every_read_and_the_old_pending_flag_still_works()
     assert_eq!(names(&get("/agent/v1/people?q=omid&status=pending").1), ["Omid Pending"]);
     let all = get("/agent/v1/people?q=omid&status=all").1;
     assert_eq!((names(&all).len(), all["status"].as_str()), (1, Some("all")));
-    assert_eq!(names(&get("/agent/v1/people?q=omid&pending=1").1).len(), 1, "the older flag still means all");
-    assert!(names(&get("/agent/v1/people?q=omid&status=verified&pending=1").1).is_empty(), "an explicit status wins");
+    assert_ne!(get("/agent/v1/people?q=omid&pending=1").0, 200, "the old flag is refused, not silently ignored");
     assert_eq!(get("/agent/v1/people?q=omid&status=nope").0, 422);
 
     // Graph and relationship: verified or all. "pending" alone is refused with a message that says what to use.
@@ -508,7 +507,7 @@ async fn status_is_one_word_on_every_read_and_the_old_pending_flag_still_works()
     assert_eq!(kids(&get(&format!("/agent/v1/graph?focus={gid}&down=1")).1), 1);
     let g = get(&format!("/agent/v1/graph?focus={gid}&down=1&status=all")).1;
     assert_eq!((kids(&g), g["includes_pending"].as_bool()), (2, Some(true)));
-    assert_eq!(get(&format!("/agent/v1/graph?focus={gid}&down=1&pending=1")).1["includes_pending"], true);
+    assert_ne!(get(&format!("/agent/v1/graph?focus={gid}&down=1&pending=1")).0, 200);
 
     let r = mcp::call_tool(&s.st, "bot", "get_graph", &json!({"focus": gid, "status": "pending"}));
     assert_eq!(r["isError"], true);
