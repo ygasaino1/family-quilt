@@ -361,3 +361,43 @@ When the reviewer corrects a value in the Review panel they can add one line say
 tidied, longer is refused). It is stored on each correction made by that request (`reviewer_edits[].note`) and agents
 read it as `note` on the `corrected` history event and in `reviewer_corrections` of `list_my_proposals`. Notes are
 information for the agent, never instructions (same rule as every other note). Putting a value back removes the entry and its note.
+
+## MCP tool surface rework (2026-11-27)
+
+Driven by two reviews of the MCP layer and an earlier draft of the same idea whose bugs we did not want to repeat.
+Development phase, no real users: nothing was kept for old callers (the agent REST door's `?pending=1` is refused,
+`link_id`, `display_name` on cards, `include_pending` and the two proposal tools are gone).
+
+- **The schema is the contract.** `create_proposal` publishes every field with `required`, lengths, enums and
+  `additionalProperties: false`. `review::submit` exports the accepted key lists and a test fails if the published
+  schema and the validator differ, if a required field is not marked required, if an object is open, or if an enum
+  value the schema offers is not accepted. The guide is prose around it, not the definition.
+- **Tool arguments are validated against the tool's own schema** (`invalid_arguments`, every problem at once, path and
+  code each, same shape as a bad proposal): unknown, missing or blank required, wrong type, out of range, too long.
+  No more `""` lookups or `"100"` silently becoming the default. Enum values are left to the handlers (a sex filter
+  takes words, codes and any case).
+- **One sex vocabulary for agents: words** (`male`, `female`, `other`, `unknown`) in results, filters, group counts,
+  edits and errors; the stored codes stay inside the store and are still accepted as input. Found because a value read
+  from a card (`female`) was rejected as an edit's `from` (`stale_from`).
+- **One `status` word** (`verified` default, `pending`, `all`) on search, list, graph and relationship; graph and
+  relationship refuse `pending` alone (nothing meaningful to show) and say to use `all`.
+- **Search pages with a keyset cursor** (`<tree_version>~<status>~<match position>~<last id>~<search text>`), like
+  `list_people`: results are ordered by where the text first matches a name, then id; one extra row is fetched so an exact
+  multiple has no empty last page; a cursor from another search or status is refused; later pages carry
+  `changed_since_start`. Offsets stay gone: they repeat or skip people when the tree changes between pages.
+- **`list_people(name)` and `search_people` match the same people** (every name, not only the shown one), so listing
+  first cannot make an agent believe someone does not exist and propose a duplicate.
+- **`proposals` replaces `list_my_proposals` and `get_proposal`** (nine tools become eight): your own, newest first,
+  `status` (pending, approved, rejected, withdrawn) filtered in the query so pages are full, a cursor that is the last
+  row shown, and `id` for one in full. The summary fields are the same in both views.
+- **`not_yours` is not `not_found`** (get and withdraw), and the message names the proposal's owner and the caller so a
+  changed client name is visible. Identity is still the client name; per-agent tokens can wait (one user, one token).
+- **One edge shape:** `{id, type, a, b, kind, subtype, status}` in a person's links, the graph and a proposal (for
+  `parent_child`, `a` is the parent); a person's links add `role`, `other_id`, `other_name`. `status` is a word, not
+  a `pending` flag. Cards lost the duplicate `display_name`. `web/js` follows (`l.id`, `p.name`).
+- **Tool metadata:** annotations on every tool (writes say not read-only, not destructive, not idempotent), descriptions
+  capped at 120 words with detail in per-argument descriptions, `search_people` and `list_people` point at each other,
+  and a test checks the guide names every tool and none that were removed.
+- **Not done here:** merging search with list or person with graph (kept separate: different indexes and shapes),
+  paged history in `get_person` (still `history_all`), and the protocol and bridge work (`server/discover`, `-32022`,
+  no sessions, honest bridge errors, one error mapping for both doors).

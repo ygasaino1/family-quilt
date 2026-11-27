@@ -10,13 +10,13 @@ Read-only work: finding, listing, filtering and counting people. For proposing c
 | How many of each sex / status | `list_people` with `group_by: "sex"` (or `"status"`), plus any filters |
 | A list of names | `list_people` with `fields: ["id","name"]`, `format: "columns"`, `limit: 2000` |
 | One person's relatives and history | `get_person` |
-| Someone by name | `search_people` (cards: birth year, parents, partners, children) |
+| Someone by name (to check they exist) | `search_people` (cards: birth year, parents, partners, children); it pages with `after` too |
 | People with no parents / partners / children | `list_people` with `no_parents` / `no_partners` / `no_children` |
 | Everyone one proposal added | `list_people` with `created_by_proposal` |
 
 ## Values (use exactly these)
 
-* `sex`: `male`, `female`, `other`, `unknown` (the codes `M`, `F`, `X`, `U` also work). Cards show the codes.
+* `sex`: `male`, `female`, `other`, `unknown` (the codes `M`, `F`, `X`, `U` also work as input). Results show the words.
 * `status`: `verified` (default), `pending`, `all`.
 * `fields`: `id`, `name`, `sex`, `birth_year`, `death_year`, `is_living`, `status`, `proposal_id`, `parents`,
   `partners`, `children_count`. `name`, `sex`, `birth_year` and the other plain ones are cheap; `parents`, `partners`,
