@@ -314,6 +314,16 @@ async fn mcp_has_exactly_nine_tools_and_no_way_to_approve_edit_or_delete() {
     let r = call(52, "list_people", json!({"sexx": "F"}));
     assert_eq!(r["result"]["isError"], true);
     assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("Unknown argument"));
+    // Missing and mistyped arguments are named with a path and a code; they are never turned into a lookup of "" or a default.
+    let fields = |r: &Value| -> (String, Vec<(String, String)>) {
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        let e: Value = serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        let f = e["error"]["fields"].as_array().unwrap().iter().map(|f| (f["path"].as_str().unwrap().to_string(), f["code"].as_str().unwrap().to_string())).collect();
+        (e["error"]["code"].as_str().unwrap().to_string(), f)
+    };
+    assert_eq!(fields(&call(56, "get_person", json!({}))), ("invalid_arguments".to_string(), vec![("$.id".to_string(), "required".to_string())]));
+    assert_eq!(fields(&call(57, "list_people", json!({"limit": "100"}))).1, vec![("$.limit".to_string(), "wrong_type".to_string())]);
+    assert_eq!(fields(&call(58, "search_people", json!({"q": "gus", "include_pending": "true"}))).1, vec![("$.include_pending".to_string(), "wrong_type".to_string())]);
     let r = call(53, "list_people", json!({"status": "all", "fields": ["id", "name"], "format": "columns", "limit": 2}));
     let v: Value = serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(v["columns"], json!(["id", "name"]));
@@ -438,4 +448,31 @@ async fn human_edits_are_logged_and_undoable() {
     assert_eq!(ui(p, "POST", &format!("/api/history/{rid}/undo"), None).0, 200);
     let (_, d) = ui(p, "GET", &format!("/api/people/{gid}"), None);
     assert_eq!(d["person"]["note"], Value::Null);
+}
+
+/// "Not found" and "not yours" are different answers: an agent that lost its identity (a changed client name) must be
+/// able to tell that from a mistyped id, instead of retrying blindly.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_proposal_that_is_not_yours_is_told_apart_from_one_that_does_not_exist() {
+    use family_server::ops;
+    let s = start().await;
+    let gid = first_person_id(&s.st);
+    let made =
+        ops::create_proposal(&s.st, "Agent A", &json!({"summary": "x", "people": [{"ref": "n", "full_name": "New Person"}], "relationships": [{"type": "parent_child", "a": gid, "b": "n"}]})).unwrap();
+    let pid = made["proposal_id"].as_str().unwrap().to_string();
+
+    assert!(ops::get_proposal(&s.st, "Agent A", &pid).is_ok());
+    let e = ops::get_proposal(&s.st, "Agent B", &pid).unwrap_err();
+    assert_eq!((e.code.as_str(), e.status.as_u16()), ("not_yours", 403));
+    assert!(e.message.contains("Agent A") && e.message.contains("Agent B"), "names both, so a changed client name shows: {}", e.message);
+    let e = ops::get_proposal(&s.st, "Agent B", "nope").unwrap_err();
+    assert_eq!((e.code.as_str(), e.status.as_u16()), ("not_found", 404));
+
+    // Withdrawing someone else's is also "not yours" and names both; a missing one is "not found".
+    let e = ops::withdraw_proposal(&s.st, "Agent B", &pid, None).unwrap_err();
+    assert_eq!(e.fields[0].code, "not_yours");
+    assert!(e.fields[0].message.contains("Agent A") && e.fields[0].message.contains("Agent B"), "{}", e.fields[0].message);
+    assert_eq!(ops::withdraw_proposal(&s.st, "Agent B", "nope", None).unwrap_err().code, "not_found");
+    // The owner can still withdraw it.
+    assert!(ops::withdraw_proposal(&s.st, "Agent A", &pid, None).is_ok());
 }

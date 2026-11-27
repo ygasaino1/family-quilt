@@ -43,7 +43,13 @@ pub fn get_proposal(st: &Shared, agent: &str, id: &str) -> Result<Value, ApiErro
     let p = store.get_proposal(&CTX, id)?;
     let mine = format!("agent:{}", family_review::clean_agent_name(agent));
     if p.created_by != mine {
-        return Err(ApiError::new(axum::http::StatusCode::NOT_FOUND, "not_found", "You have no proposal with that id (see list_my_proposals)."));
+        let theirs = p.created_by.strip_prefix("agent:").unwrap_or(&p.created_by);
+        let me = family_review::clean_agent_name(agent);
+        return Err(ApiError::new(
+            axum::http::StatusCode::FORBIDDEN,
+            "not_yours",
+            &format!("That proposal was sent by '{theirs}' and you are '{me}'. Proposals are private to the agent that sent them; if it was yours, your client name has changed since (it has to stay the same). List your own proposals to find yours."),
+        ));
     }
     let people: Vec<Value> = store.people_of_proposal(&CTX, id)?.iter().filter_map(|i| query::card(&store, i).ok()).collect();
     let mut links = vec![];

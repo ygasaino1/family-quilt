@@ -14,6 +14,7 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::Router;
+use family_review::FieldError;
 use serde_json::{json, Value};
 
 pub const SUPPORTED_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26"];
@@ -216,17 +217,106 @@ fn tool_error(e: ApiError) -> Value {
     text_result(&e.body(), true)
 }
 
-/// An argument the tool does not have is an error, not something to ignore: a typo must not become an empty result.
-fn unknown_arguments(name: &str, args: &Value) -> Option<String> {
-    let defs = tool_definitions();
-    let props = defs.as_array()?.iter().find(|t| t["name"] == name)?["inputSchema"]["properties"].as_object()?.clone();
-    let extra: Vec<&str> = args.as_object()?.keys().map(String::as_str).filter(|k| !props.contains_key(*k)).collect();
-    if extra.is_empty() {
-        return None;
+/// What a JSON value is, in the words a schema uses.
+fn json_type(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(n) if n.is_i64() || n.is_u64() => "integer",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
     }
+}
+
+/// Does `v` have the schema's `type`? (An integer is also a number.)
+fn has_type(v: &Value, want: &str) -> bool {
+    let got = json_type(v);
+    got == want || (want == "number" && got == "integer")
+}
+
+/// One value against the parts of its schema that a mistake can break: type, range, length. Enum values are not
+/// checked here: the tools already answer a bad `status`, `group_by` or `fields` entry precisely, and some accept
+/// more than the schema lists (a sex filter takes words, codes and any case).
+fn check_value(path: &str, v: &Value, schema: &Value, errs: &mut Vec<FieldError>) {
+    if let Some(want) = schema["type"].as_str() {
+        if !has_type(v, want) {
+            errs.push(FieldError::new(path, "wrong_type", format!("must be of type {want}, not {}", json_type(v))));
+            return;
+        }
+    }
+    if let (Some(n), Some(min)) = (v.as_i64(), schema["minimum"].as_i64()) {
+        if n < min {
+            errs.push(FieldError::new(path, "out_of_range", format!("{n} is below the minimum {min}")));
+        }
+    }
+    if let (Some(n), Some(max)) = (v.as_i64(), schema["maximum"].as_i64()) {
+        if n > max {
+            errs.push(FieldError::new(path, "out_of_range", format!("{n} is above the maximum {max}")));
+        }
+    }
+    if let (Some(t), Some(max)) = (v.as_str(), schema["maxLength"].as_u64()) {
+        if t.chars().count() as u64 > max {
+            errs.push(FieldError::new(path, "too_long", format!("longer than {max} characters")));
+        }
+    }
+    if let (Some(items), Some(item_schema)) = (v.as_array(), schema.get("items")) {
+        // Only simple items are checked here; the objects inside a proposal get their precise errors from the proposal validator.
+        if item_schema["type"] != "object" {
+            for (i, x) in items.iter().enumerate() {
+                check_value(&format!("{path}[{i}]"), x, item_schema, errs);
+            }
+        }
+    }
+}
+
+/// The arguments of a tool call against the tool's own published schema, all problems at once: an unknown
+/// argument, a missing required one, the wrong type (`"100"` for a number), a value outside its range.
+/// Nothing is guessed or defaulted: an agent is told exactly what to fix, in the same `fields` shape as a bad proposal.
+fn check_arguments(name: &str, args: &Value) -> Result<(), ApiError> {
+    let defs = tool_definitions();
+    let Some(schema) = defs.as_array().and_then(|a| a.iter().find(|t| t["name"] == name)).map(|t| &t["inputSchema"]) else {
+        return Ok(()); // an unknown tool gets its own error from the caller
+    };
+    let empty = serde_json::Map::new();
+    let given = match args {
+        Value::Null => &empty,
+        Value::Object(o) => o,
+        other => return Err(invalid_arguments(vec![FieldError::new("$", "wrong_type", format!("the arguments must be an object, not {}", json_type(other)))])),
+    };
+    let props = schema["properties"].as_object().unwrap_or(&empty);
+    let mut errs = vec![];
     let mut allowed: Vec<&str> = props.keys().map(String::as_str).collect();
     allowed.sort_unstable();
-    Some(format!("Unknown argument(s) for {name}: {}. Allowed: {}", extra.join(", "), allowed.join(", ")))
+    for k in given.keys().filter(|k| !props.contains_key(*k)) {
+        errs.push(FieldError::new(format!("$.{k}"), "unknown_argument", format!("Unknown argument: '{k}' is not an argument of {name}; allowed: {}", allowed.join(", "))));
+    }
+    for r in schema["required"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+        let blank = match given.get(r) {
+            None | Some(Value::Null) => true,
+            Some(Value::String(s)) => s.trim().is_empty(),
+            Some(_) => false,
+        };
+        if blank {
+            errs.push(FieldError::new(format!("$.{r}"), "required", format!("`{r}` is required")));
+        }
+    }
+    for (k, v) in given {
+        // null for an optional argument means "not given", as it does inside a proposal.
+        if let (Some(ps), false) = (props.get(k), v.is_null()) {
+            check_value(&format!("$.{k}"), v, ps, &mut errs);
+        }
+    }
+    if errs.is_empty() {
+        Ok(())
+    } else {
+        Err(invalid_arguments(errs))
+    }
+}
+
+fn invalid_arguments(fields: Vec<FieldError>) -> ApiError {
+    ApiError { status: StatusCode::UNPROCESSABLE_ENTITY, code: "invalid_arguments".into(), message: "The arguments have problems; see `fields`. Nothing was done.".into(), fields }
 }
 
 pub fn call_tool(st: &Shared, agent: &str, name: &str, args: &Value) -> Value {
@@ -234,8 +324,8 @@ pub fn call_tool(st: &Shared, agent: &str, name: &str, args: &Value) -> Value {
     let b = |k: &str| args.get(k).and_then(Value::as_bool).unwrap_or(false);
     let n = |k: &str, d: u64| args.get(k).and_then(Value::as_u64).unwrap_or(d);
     st.log_activity(agent, &format!("MCP {name}"));
-    if let Some(bad) = unknown_arguments(name, args) {
-        return text_result(&json!({"error": {"code": "unknown_argument", "message": bad}}), true);
+    if let Err(e) = check_arguments(name, args) {
+        return tool_error(e);
     }
     let r = match name {
         "search_people" => ops::search_people(st, &s("q"), n("limit", 50) as usize, b("include_pending")),
@@ -475,5 +565,62 @@ mod schema_tests {
         for v in vals(&person["calendar"]) {
             assert!(["gregorian", "jalali"].contains(&v.as_str()), "calendar {v}");
         }
+    }
+}
+
+#[cfg(test)]
+mod argument_tests {
+    use super::*;
+
+    fn problems(name: &str, args: Value) -> Vec<(String, &'static str)> {
+        match check_arguments(name, &args) {
+            Ok(()) => vec![],
+            Err(e) => {
+                assert_eq!(e.code, "invalid_arguments");
+                e.fields.into_iter().map(|f| (f.path, f.code)).collect()
+            }
+        }
+    }
+
+    #[test]
+    fn a_missing_required_argument_is_named_not_turned_into_an_empty_lookup() {
+        assert_eq!(problems("get_person", json!({})), [("$.id".to_string(), "required")]);
+        assert_eq!(problems("get_person", json!({"id": "  "})), [("$.id".to_string(), "required")]);
+        assert_eq!(problems("get_person", json!({"id": null})), [("$.id".to_string(), "required")]);
+        assert_eq!(problems("find_relationship", json!({"a": "x"})), [("$.b".to_string(), "required")]);
+        assert_eq!(problems("get_graph", Value::Null), [("$.focus".to_string(), "required")]);
+        assert_eq!(problems("search_people", json!({})), [("$.q".to_string(), "required")]);
+    }
+
+    #[test]
+    fn a_wrong_type_is_an_error_not_a_silent_default() {
+        assert_eq!(problems("list_people", json!({"limit": "100"})), [("$.limit".to_string(), "wrong_type")]);
+        assert_eq!(problems("list_people", json!({"limit": 2.5})), [("$.limit".to_string(), "wrong_type")]);
+        assert_eq!(problems("search_people", json!({"q": "kim", "include_pending": "true"})), [("$.include_pending".to_string(), "wrong_type")]);
+        assert_eq!(problems("find_relationship", json!({"a": 1, "b": "y"})), [("$.a".to_string(), "wrong_type")]);
+        assert_eq!(problems("list_people", json!({"fields": "name"})), [("$.fields".to_string(), "wrong_type")]);
+        assert_eq!(problems("list_people", json!({"fields": ["name", 3]})), [("$.fields[1]".to_string(), "wrong_type")]);
+        assert_eq!(problems("create_proposal", json!({"summary": "x", "people": {"ref": "a"}})), [("$.people".to_string(), "wrong_type")]);
+    }
+
+    #[test]
+    fn range_length_and_unknown_arguments_are_reported_together() {
+        let p = problems("list_people", json!({"limit": 0, "bogus": 1}));
+        assert!(p.contains(&("$.limit".to_string(), "out_of_range")) && p.contains(&("$.bogus".to_string(), "unknown_argument")), "{p:?}");
+        assert_eq!(problems("search_people", json!({"q": "k", "limit": 5000})), [("$.limit".to_string(), "out_of_range")]);
+        assert_eq!(problems("create_proposal", json!({"summary": "x".repeat(301), "people": [{"ref": "a", "full_name": "A"}]})), [("$.summary".to_string(), "too_long")]);
+        // Nothing is checked twice: all of these in one call come back at once.
+        assert_eq!(problems("find_relationship", json!({"b": 5})).len(), 2);
+    }
+
+    #[test]
+    fn good_calls_pass_and_null_means_not_given() {
+        assert!(problems("list_people", json!({})).is_empty());
+        assert!(problems("list_people", json!({"limit": 5, "sex": "M", "status": "all", "after": null})).is_empty(), "codes and words stay valid");
+        assert!(problems("search_people", json!({"q": "kim", "limit": 1000, "include_pending": true})).is_empty());
+        assert!(problems("list_my_proposals", json!({})).is_empty());
+        assert!(problems("create_proposal", json!({"summary": "x", "people": [{"ref": "a", "full_name": "A"}]})).is_empty());
+        // The proposal's own contents are checked by the proposal validator, with its own paths.
+        assert!(problems("create_proposal", json!({"summary": "x", "people": [{"nonsense": 1}]})).is_empty());
     }
 }

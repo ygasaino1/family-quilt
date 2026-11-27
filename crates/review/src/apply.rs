@@ -263,7 +263,12 @@ pub fn reject_with_note(store: &mut Store, proposal_id: &str, by: &str, note: Op
 pub fn withdraw(store: &mut Store, proposal_id: &str, agent_by: &str, reason: Option<&str>) -> Result<RejectReport> {
     let proposal = store.get_proposal(&CTX, proposal_id)?;
     if proposal.created_by != agent_by {
-        return Err(ReviewError::Invalid(vec![FieldError::new("$.id", "not_yours", "only the agent that sent a proposal can withdraw it")]));
+        let name = |s: &str| s.strip_prefix("agent:").unwrap_or(s).to_string();
+        return Err(ReviewError::Invalid(vec![FieldError::new(
+            "$.id",
+            "not_yours",
+            format!("only the agent that sent a proposal can withdraw it; this one was sent by '{}' and you are '{}'", name(&proposal.created_by), name(agent_by)),
+        )]));
     }
     if proposal.status != "pending" {
         return Err(StoreError::Conflict(format!("this proposal was already {}; ask the user to undo it from History if it was approved", proposal.status)).into());
