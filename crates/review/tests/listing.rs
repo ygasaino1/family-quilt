@@ -135,3 +135,29 @@ fn cursor_paging_is_stateless_complete_and_notices_changes() {
         assert!(list_people(&s, &opts(|o| o.after = Some(bad.into()))).is_err(), "{bad}");
     }
 }
+
+/// `list_people(name=…)` and `search_people` find the same people: both look at EVERY name of a person, not only the
+/// one shown. Otherwise an agent that lists by name misses someone stored under another name and proposes a duplicate.
+#[test]
+fn the_name_filter_matches_any_name_of_a_person_like_search_does() {
+    use family_review::query::{search_page, Scope};
+    let mut s = Store::open_in_memory().unwrap();
+    let maryam = person(&mut s, "Maryam Karimi", Sex::Female);
+    s.add_name(&CTX, &maryam, NewName::full("Mary Smith"), false, "t").unwrap();
+    person(&mut s, "Omid Rahimi", Sex::Male);
+
+    let by_list =
+        |q: &str| -> Vec<String> { list_people(&s, &opts(|o| o.name = Some(q.into()))).unwrap()["people"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap().to_string()).collect() };
+    let by_search = |q: &str| -> Vec<String> { search_page(&s, q, 50, Scope::Verified, None).unwrap().people.into_iter().map(|p| p.id).collect() };
+
+    assert_eq!(by_list("smith"), [maryam.clone()], "found by an alternate name");
+    assert_eq!(by_list("maryam"), [maryam.clone()], "and by the primary one");
+    assert!(by_list("zzz").is_empty());
+    for q in ["smith", "maryam", "mary", "karimi", "omid", "rah", "zzz", "i"] {
+        let (mut a, mut b) = (by_list(q), by_search(q));
+        a.sort();
+        b.sort();
+        assert_eq!(a, b, "list(name={q}) and search({q}) disagree");
+    }
+    assert_eq!(list_people(&s, &opts(|o| o.name = Some("smith".into()))).unwrap()["total"], 1);
+}

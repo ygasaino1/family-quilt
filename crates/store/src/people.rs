@@ -408,6 +408,14 @@ impl Store {
 
     // ───────────────────────────── search ─────────────────────────────
 
+    /// Ids of every person who has a name containing `key` (an already normalised search key), looking at ALL of a
+    /// person's names exactly as [`Store::search_people_page`] does. For filtering a list the same way search matches.
+    pub fn person_ids_with_name(&self, key: &str) -> Result<std::collections::HashSet<String>> {
+        let mut stmt = self.conn.prepare("SELECT DISTINCT person_id FROM person_name WHERE deleted_at IS NULL AND instr(search_key, ?1) > 0")?;
+        let ids = stmt.query_map([key], |r| r.get::<_, String>(0))?.collect::<std::result::Result<_, _>>()?;
+        Ok(ids)
+    }
+
     pub fn search_people(&self, ctx: &AccessContext, q: &SearchQuery) -> Result<Vec<PersonSummary>> {
         let limit = if q.limit == 0 { 50 } else { q.limit.min(1000) };
         Ok(self.search_people_page(ctx, &SearchQuery { limit, ..q.clone() }, None)?.into_iter().map(|(p, _)| p).collect())

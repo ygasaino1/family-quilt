@@ -252,7 +252,11 @@ pub fn list_people(store: &Store, o: &ListOpts) -> Result<Value> {
         Some(p) => Some(store.people_of_proposal(&CTX, p)?.into_iter().collect()),
         None => None,
     };
-    let needle = o.name.as_deref().map(family_store::names::search_key).filter(|k| !k.is_empty());
+    // The name filter looks at every name of a person, exactly as search does (not just the one shown).
+    let named: Option<HashSet<String>> = match o.name.as_deref().map(family_store::names::search_key).filter(|k| !k.is_empty()) {
+        Some(k) => Some(store.person_ids_with_name(&k)?),
+        None => None,
+    };
     let mut hits: Vec<usize> = vec![];
     for (i, p) in g.people.iter().enumerate() {
         if status == "pending" && p.status != Status::Pending {
@@ -267,7 +271,7 @@ pub fn list_people(store: &Store, o: &ListOpts) -> Result<Value> {
         if of_proposal.as_ref().is_some_and(|set| !set.contains(&p.id)) {
             continue;
         }
-        if needle.as_ref().is_some_and(|k| !family_store::names::search_key(&p.display_name).contains(k.as_str())) {
+        if named.as_ref().is_some_and(|ids| !ids.contains(&p.id)) {
             continue;
         }
         hits.push(i);
