@@ -512,3 +512,38 @@ async fn status_is_one_word_on_every_read_and_the_old_pending_flag_still_works()
     let v: Value = serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!((names(&v), v["status"].as_str()), (vec!["Omid Pending".to_string()], Some("pending")));
 }
+
+/// search_people pages with a cursor through MCP and REST: every match once, and the cursor is the same word `list_people` uses.
+#[tokio::test(flavor = "multi_thread")]
+async fn search_people_pages_through_the_tool_and_the_rest_door() {
+    use family_server::mcp;
+    let s = start().await;
+    for n in ["Kim A", "Kim B", "Kim C", "Kim D", "Kim E"] {
+        s.st.store.lock().unwrap().create_person(&CTX, NewPerson { sex: Sex::Unknown, names: vec![NewName::full(n)], ..Default::default() }, &Origin::human()).unwrap();
+    }
+    let mut seen = vec![];
+    let mut after: Option<String> = None;
+    for _ in 0..6 {
+        let mut args = json!({"q": "kim", "limit": 2});
+        if let Some(c) = &after {
+            args["after"] = json!(c);
+        }
+        let r = mcp::call_tool(&s.st, "bot", "search_people", &args);
+        assert_ne!(r["isError"], true, "{r}");
+        let v: Value = serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap();
+        seen.extend(v["people"].as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap().to_string()));
+        match v["next_cursor"].as_str() {
+            Some(c) => after = Some(c.to_string()),
+            None => break,
+        }
+    }
+    seen.sort();
+    assert_eq!(seen, ["Kim A", "Kim B", "Kim C", "Kim D", "Kim E"]);
+
+    // REST door: same cursor parameter; a cursor for another search is a 422 field error.
+    let (code, first) = agent(s.port, "GET", "/agent/v1/people?q=kim&limit=2", "bot", None);
+    assert_eq!(code, 200);
+    let c = first["next_cursor"].as_str().unwrap();
+    assert_eq!(agent(s.port, "GET", &format!("/agent/v1/people?q=kim&limit=2&after={c}"), "bot", None).0, 200);
+    assert_eq!(agent(s.port, "GET", &format!("/agent/v1/people?q=gus&limit=2&after={c}"), "bot", None).0, 422);
+}

@@ -22,14 +22,19 @@ fn agent_patch(patch: &Value) -> Value {
     }
 }
 
-pub fn search_people(st: &Shared, q: &str, limit: usize, scope: Scope) -> Result<Value, ApiError> {
+pub fn search_people(st: &Shared, q: &str, limit: usize, scope: Scope, after: Option<&str>) -> Result<Value, ApiError> {
     if q.trim().is_empty() {
         return Err(ApiError::bad_request("`q` (part of a name) is required"));
     }
     let store = lock(st);
-    let people = query::search_cards(&store, q, limit, scope)?;
+    let page = query::search_page(&store, q, limit, scope, after)?;
+    let people: Vec<Value> = page.people.iter().map(|p| query::card(&store, &p.id)).collect::<Result<_, _>>()?;
     let rejected = previously_rejected(&store, q);
-    Ok(json!({ "people": people, "status": scope.as_str(), "previously_rejected": rejected, "tree_version": query::tree_version(&store)? }))
+    let mut out = json!({ "people": people, "status": scope.as_str(), "next_cursor": page.next_cursor, "previously_rejected": rejected, "tree_version": query::tree_version(&store)? });
+    if let Some(changed) = page.changed_since_start {
+        out["changed_since_start"] = json!(changed);
+    }
+    Ok(out)
 }
 
 /// Page through people with filters (the search needs a name; this does not).

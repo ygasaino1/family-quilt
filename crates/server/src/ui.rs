@@ -105,7 +105,7 @@ struct PeopleQ {
 }
 
 async fn people(State(st): State<Shared>, Query(q): Query<PeopleQ>) -> Result<Json<Value>, ApiError> {
-    ops::search_people(&st, q.q.as_deref().unwrap_or(""), q.limit.unwrap_or(50), family_review::query::Scope::All).map(Json)
+    ops::search_people(&st, q.q.as_deref().unwrap_or(""), q.limit.unwrap_or(50), family_review::query::Scope::All, None).map(Json)
 }
 
 async fn person(State(st): State<Shared>, Path(id): Path<String>) -> Result<Json<Value>, ApiError> {

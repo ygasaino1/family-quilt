@@ -57,6 +57,7 @@ fn scope(status: Option<String>, pending: Option<u8>) -> Result<family_review::q
 struct PeopleQ {
     q: Option<String>,
     limit: Option<usize>,
+    after: Option<String>,
     status: Option<String>,
     /// Deprecated spelling of `status=all`.
     pending: Option<u8>,
@@ -64,7 +65,7 @@ struct PeopleQ {
 
 async fn people(State(st): State<Shared>, Extension(a): Extension<AgentName>, Query(q): Query<PeopleQ>) -> Result<Json<Value>, ApiError> {
     st.log_activity(name(&a), "searched people");
-    ops::search_people(&st, q.q.as_deref().unwrap_or(""), q.limit.unwrap_or(50), scope(q.status, q.pending)?).map(Json)
+    ops::search_people(&st, q.q.as_deref().unwrap_or(""), q.limit.unwrap_or(50), scope(q.status, q.pending)?, q.after.as_deref()).map(Json)
 }
 
 #[derive(Deserialize)]

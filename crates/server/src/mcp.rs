@@ -142,7 +142,8 @@ pub fn tool_definitions() -> Value {
         "inputSchema": {"type": "object", "properties": {
             "q": {"type": "string", "description": "Part of a name"},
             "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "description": "Default 50"},
-            "status": {"type": "string", "enum": ["verified", "pending", "all"], "description": "verified (default), pending (only people still waiting for the user's review) or all"}
+            "status": {"type": "string", "enum": ["verified", "pending", "all"], "description": "verified (default), pending (only people still waiting for the user's review) or all"},
+            "after": {"type": "string", "description": "The `next_cursor` of the previous page, unchanged"}
         }, "required": ["q"]},
         "annotations": {"readOnlyHint": true}
       },
@@ -329,7 +330,9 @@ pub fn call_tool(st: &Shared, agent: &str, name: &str, args: &Value) -> Value {
         return tool_error(e);
     }
     let r = match name {
-        "search_people" => Scope::parse(&s("status")).map_err(ApiError::from).and_then(|sc| ops::search_people(st, &s("q"), n("limit", 50) as usize, sc)),
+        "search_people" => {
+            Scope::parse(&s("status")).map_err(ApiError::from).and_then(|sc| ops::search_people(st, &s("q"), n("limit", 50) as usize, sc, Some(s("after")).filter(|x| !x.is_empty()).as_deref()))
+        }
         "list_people" => {
             let o = family_review::query::ListOpts {
                 status: s("status"),

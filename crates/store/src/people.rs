@@ -409,18 +409,33 @@ impl Store {
     // ───────────────────────────── search ─────────────────────────────
 
     pub fn search_people(&self, ctx: &AccessContext, q: &SearchQuery) -> Result<Vec<PersonSummary>> {
-        let limit = if q.limit == 0 { 50 } else { q.limit.min(1000) } as i64;
+        let limit = if q.limit == 0 { 50 } else { q.limit.min(1000) };
+        Ok(self.search_people_page(ctx, &SearchQuery { limit, ..q.clone() }, None)?.into_iter().map(|(p, _)| p).collect())
+    }
+
+    /// Search in a stable order (the position where the text first matches a name, then id) and continue after a
+    /// row: `after` is the `(position, id)` returned with the last row of the previous page, so a person added or
+    /// changed between pages can never make one repeat or go missing. `q.limit` is used as given (at most 1001, so
+    /// a caller can ask for one more than it shows to know whether a next page exists).
+    pub fn search_people_page(&self, ctx: &AccessContext, q: &SearchQuery, after: Option<(i64, &str)>) -> Result<Vec<(PersonSummary, i64)>> {
+        let limit = q.limit.clamp(1, 1001) as i64;
         let key = search_key(&q.text);
+        let (after_pos, after_id) = match after {
+            Some((pos, id)) => (Some(pos), Some(id.to_string())),
+            None => (None, None),
+        };
         let sql = format!(
-            "SELECT p.id, {DISPLAY_NAME}, p.sex, p.is_living, p.birth_date, p.birth_qualifier, p.death_date, p.death_qualifier, p.status
+            "SELECT p.id, {DISPLAY_NAME}, p.sex, p.is_living, p.birth_date, p.birth_qualifier, p.death_date, p.death_qualifier, p.status, MIN(instr(n.search_key, ?1)) AS pos
              FROM person p JOIN person_name n ON n.person_id = p.id AND n.deleted_at IS NULL
              WHERE p.deleted_at IS NULL AND p.merged_into IS NULL AND instr(n.search_key, ?1) > 0 AND (?2 IS NULL OR p.status = ?2) AND {}
-             GROUP BY p.id ORDER BY MIN(instr(n.search_key, ?1)), p.id LIMIT ?3",
+             GROUP BY p.id
+             HAVING (?4 IS NULL OR MIN(instr(n.search_key, ?1)) > ?4 OR (MIN(instr(n.search_key, ?1)) = ?4 AND p.id > ?5))
+             ORDER BY pos, p.id LIMIT ?3",
             ctx.row_filter("p")
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let status = q.status.map(|s| s.as_str());
-        let rows = stmt.query_map(params![key, status, limit], |r| {
+        let rows = stmt.query_map(params![key, status, limit, after_pos, after_id], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
@@ -431,19 +446,23 @@ impl Store {
                 r.get::<_, Option<String>>(6)?,
                 r.get::<_, Option<String>>(7)?,
                 r.get::<_, String>(8)?,
+                r.get::<_, i64>(9)?,
             ))
         })?;
         rows.map(|row| {
-            let (id, display_name, sex, living, bd, bq, dd, dq, status) = row?;
-            Ok(PersonSummary {
-                id,
-                display_name,
-                sex: parse_enum(&sex, Sex::parse)?,
-                is_living: living == 1,
-                birth: decode_fuzzy(bd, bq)?,
-                death: decode_fuzzy(dd, dq)?,
-                status: parse_enum(&status, Status::parse)?,
-            })
+            let (id, display_name, sex, living, bd, bq, dd, dq, status, pos) = row?;
+            Ok((
+                PersonSummary {
+                    id,
+                    display_name,
+                    sex: parse_enum(&sex, Sex::parse)?,
+                    is_living: living == 1,
+                    birth: decode_fuzzy(bd, bq)?,
+                    death: decode_fuzzy(dd, dq)?,
+                    status: parse_enum(&status, Status::parse)?,
+                },
+                pos,
+            ))
         })
         .collect()
     }

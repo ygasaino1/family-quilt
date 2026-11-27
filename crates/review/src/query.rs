@@ -85,6 +85,59 @@ pub fn card(store: &Store, id: &str) -> Result<Value> {
     }))
 }
 
+/// One page of search results.
+#[derive(Debug)]
+pub struct SearchPage {
+    pub people: Vec<PersonSummary>,
+    /// Pass it back as `after` for the next page; none when this was the last page.
+    pub next_cursor: Option<String>,
+    /// Only on a continuation page: did the tree change since the first page was read?
+    pub changed_since_start: Option<bool>,
+}
+
+/// Search with a keyset cursor, like [`list_people`]: results come in a stable order (where the text first matches a
+/// name, then id) and a cursor says exactly where to continue, so a person added between pages cannot make one repeat
+/// or vanish. A cursor is `<tree_version>~<status>~<match position>~<last id>~<normalised search text>`; one from a
+/// different search or status is refused.
+pub fn search_page(store: &Store, text: &str, limit: usize, scope: Scope, after: Option<&str>) -> Result<SearchPage> {
+    let key = family_store::names::search_key(text);
+    let version = tree_version(store)?;
+    let not_a_cursor = || bad("after", "not a cursor: pass the `next_cursor` value from the previous page unchanged".to_string());
+    let (cursor, changed) = match after {
+        None => (None, None),
+        Some(c) => {
+            let parts: Vec<&str> = c.splitn(5, '~').collect();
+            let [v, status, pos, id, ckey] = parts[..] else { return Err(not_a_cursor()) };
+            let pos: i64 = pos.parse().map_err(|_| not_a_cursor())?;
+            if id.is_empty() || Scope::parse(status).is_err() {
+                return Err(not_a_cursor());
+            }
+            if status != scope.as_str() || ckey != key {
+                return Err(bad("after", "that cursor belongs to a different search (other text or status); start again without `after`".to_string()));
+            }
+            (Some((pos, id.to_string())), Some(v != version))
+        }
+    };
+    let status = match scope {
+        Scope::Verified => Some(Status::Verified),
+        Scope::Pending => Some(Status::Pending),
+        Scope::All => None,
+    };
+    // One more than asked for tells us whether there is a next page, so an exact multiple has no empty last page.
+    let q = SearchQuery { text: text.to_string(), status, limit: limit.clamp(1, 1000) + 1 };
+    let mut rows = store.search_people_page(&CTX, &q, cursor.as_ref().map(|(p, i)| (*p, i.as_str())))?;
+    let limit = limit.clamp(1, 1000);
+    let more = rows.len() > limit;
+    rows.truncate(limit);
+    // The first page's version is what later pages compare against.
+    let start_version = after.and_then(|c| c.split('~').next()).filter(|v| !v.is_empty()).map(str::to_string).unwrap_or(version);
+    let next_cursor = match (more, rows.last()) {
+        (true, Some((p, pos))) => Some(format!("{start_version}~{}~{pos}~{}~{key}", scope.as_str(), p.id)),
+        _ => None,
+    };
+    Ok(SearchPage { people: rows.into_iter().map(|(p, _)| p).collect(), next_cursor, changed_since_start: changed })
+}
+
 pub fn search_cards(store: &Store, text: &str, limit: usize, scope: Scope) -> Result<Vec<Value>> {
     search(store, text, limit, scope)?.iter().map(|s| card(store, &s.id)).collect()
 }
