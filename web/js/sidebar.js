@@ -128,7 +128,7 @@ async function renderPerson(el, id) {
   const linkRow = (l) => {
     const kindSel =
       l.role === 'partner'
-        ? h('select', { class: 'sel', 'aria-label': t('f.state'), onchange: (e) => patchLink(l.link_id, { subtype: e.target.value }) }, STATES.map((s) => h('option', { value: s, selected: l.subtype === s }, t('state.' + s + '.long'))))
+        ? h('select', { class: 'sel', 'aria-label': t('f.state'), onchange: (e) => patchLink(l.id, { subtype: e.target.value }) }, STATES.map((s) => h('option', { value: s, selected: l.subtype === s }, t('state.' + s + '.long'))))
         : h('select', { class: 'sel', 'aria-label': t('f.kind'), onchange: (e) => changeKind(l, id, e.target.value, e.target) }, KINDS.map((k) => h('option', { value: k, selected: l.kind === k }, t('kind.' + k))));
     return h('li', { class: 'lrow' }, h('button', { class: 'link', onclick: () => openPerson(l.other_id) }, l.other_name, l.status === 'pending' ? ' ●' : ''), kindSel, h('button', { class: 'btn tiny danger-ghost', 'aria-label': t('side.remove_link'), title: t('side.remove_link'), onclick: () => removeLink(l) }, '×'));
   };
@@ -188,13 +188,13 @@ async function changeKind(l, personId, kind, select) {
     select.value = l.kind;
     return;
   }
-  await patchLink(l.link_id, { kind });
+  await patchLink(l.id, { kind });
 }
 
 async function removeLink(l) {
   if (!(await confirmBox(t('side.remove_link'), t('side.remove_link_body', { name: l.other_name }), { danger: true, ok: t('side.remove_link') }))) return;
   try {
-    await api('/relationships/' + l.link_id, { method: 'DELETE' });
+    await api('/relationships/' + l.id, { method: 'DELETE' });
     await app.refreshAll();
   } catch (e) {
     toast(e.message, 'error');

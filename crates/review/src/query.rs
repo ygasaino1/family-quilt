@@ -78,7 +78,7 @@ pub fn card(store: &Store, id: &str) -> Result<Value> {
         }
     }
     Ok(json!({
-        "id": p.id, "name": p.display_name, "display_name": p.display_name, "sex": p.sex, "is_living": p.is_living,
+        "id": p.id, "name": p.display_name, "sex": p.sex, "is_living": p.is_living,
         "birth_year": year_of(&p.birth), "death_year": year_of(&p.death),
         "status": p.status, "proposal_id": p.proposal_id,
         "parents": parents, "partners": partners, "children_count": children,
@@ -344,12 +344,18 @@ pub fn tree_version(store: &Store) -> Result<String> {
 
 #[derive(Debug, Serialize)]
 pub struct LinkedPerson {
-    pub link_id: String,
-    /// What the other person is to this one: `parent`, `child` or `partner`.
-    pub role: &'static str,
+    // The same edge keys as everywhere else: id, type, a, b, kind, subtype, status. For parent_child, `a` is the parent.
+    pub id: String,
+    #[serde(rename = "type")]
+    pub rel_type: RelType,
+    pub a: String,
+    pub b: String,
     pub kind: Option<LinkKind>,
     pub subtype: Option<PartnershipState>,
     pub status: Status,
+    // Convenience for reading one person's links: who the other end is, and what they are to this person.
+    /// What the other person is to this one: `parent`, `child` or `partner`.
+    pub role: &'static str,
     pub other_id: String,
     pub other_name: String,
 }
@@ -372,14 +378,14 @@ pub fn person_detail(store: &Store, id: &str) -> Result<PersonDetail> {
             (RelType::Partnership, a_is_me) => ("partner", if a_is_me { r.person_b.clone() } else { r.person_a.clone() }),
         };
         let other_name = store.get_person(&CTX, &other).map(|p| p.display_name).unwrap_or_default();
-        links.push(LinkedPerson { link_id: r.id, role, kind: r.kind, subtype: r.subtype, status: r.status, other_id: other, other_name });
+        links.push(LinkedPerson { id: r.id, rel_type: r.rel_type, a: r.person_a, b: r.person_b, kind: r.kind, subtype: r.subtype, status: r.status, role, other_id: other, other_name });
     }
     let mut suggested_changes = store.open_changes_for(&CTX, "person", id)?;
     for n in &person.names {
         suggested_changes.extend(store.open_changes_for(&CTX, "person_name", &n.id)?);
     }
     for l in &links {
-        suggested_changes.extend(store.open_changes_for(&CTX, "relationship", &l.link_id)?);
+        suggested_changes.extend(store.open_changes_for(&CTX, "relationship", &l.id)?);
     }
     Ok(PersonDetail { person, links, suggested_changes })
 }
@@ -547,7 +553,7 @@ pub fn neighbourhood(store: &Store, focus: &str, up: u32, down: u32, include_pen
         .links
         .iter()
         .filter(|l| inc.contains(&l.a) && inc.contains(&l.b))
-        .map(|l| json!({"id": l.id, "type": l.rel_type, "a": g.person(l.a).id, "b": g.person(l.b).id, "kind": l.kind, "subtype": l.subtype, "pending": l.pending}))
+        .map(|l| json!({"id": l.id, "type": l.rel_type, "a": g.person(l.a).id, "b": g.person(l.b).id, "kind": l.kind, "subtype": l.subtype, "status": if l.pending { Status::Pending } else { Status::Verified }}))
         .collect();
     let _: VecDeque<u8> = VecDeque::new();
     let _: Option<Relationship> = None;

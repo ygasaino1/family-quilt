@@ -274,7 +274,7 @@ async fn mcp_has_exactly_eight_tools_and_no_way_to_approve_edit_or_delete() {
     let r = call(4, "search_people", json!({"q": "gus"}));
     assert_eq!(r["result"]["isError"], false);
     let found: Value = serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(found["people"][0]["display_name"], "Gus Tester");
+    assert_eq!(found["people"][0]["name"], "Gus Tester");
     assert_eq!(call(5, "get_person", json!({"id": gid}))["result"]["isError"], false);
     let dan = s.st.store.lock().unwrap().all_people(&CTX, false).unwrap()[1].id.clone();
     let r = call(6, "find_relationship", json!({"a": gid, "b": dan}));
@@ -624,4 +624,44 @@ async fn proposals_lists_pages_filters_and_shows_one_in_full() {
     assert_eq!(ops::proposals(&s.st, "Agent B", Some(&ids[0]), "", 20, None).unwrap_err().code, "not_yours");
     assert_eq!(ops::proposals(&s.st, "Agent B", Some(&other), "", 20, None).unwrap().get("id").and_then(Value::as_str), Some(other.as_str()));
     assert_eq!(ops::proposals(&s.st, "Agent A", Some("nope"), "", 20, None).unwrap_err().code, "not_found");
+}
+
+/// The edge keys are the same wherever an agent meets a link (person detail, graph, a proposal), and the fields the
+/// web UI reads from the same JSON are really there (the browser tests cannot run everywhere, so this pins the contract).
+#[tokio::test(flavor = "multi_thread")]
+async fn links_have_one_shape_and_the_ui_reads_fields_that_exist() {
+    use family_review::query::Scope;
+    use family_server::ops;
+    use std::collections::BTreeSet;
+    let s = start().await;
+    let gid = first_person_id(&s.st);
+    let made = ops::create_proposal(&s.st, "bot", &json!({"summary": "x", "people": [{"ref": "n", "full_name": "Kid Zzz"}], "relationships": [{"type": "parent_child", "a": gid, "b": "n"}]})).unwrap();
+    let keys = |v: &Value| v.as_object().unwrap().keys().cloned().collect::<BTreeSet<_>>();
+    let edge: BTreeSet<String> = ["id", "type", "a", "b", "kind", "subtype", "status"].iter().map(|k| k.to_string()).collect();
+
+    let g = ops::get_graph(&s.st, &gid, 1, 1, Scope::All).unwrap();
+    let in_graph = &g["links"][0];
+    let in_proposal = &ops::proposals(&s.st, "bot", Some(made["proposal_id"].as_str().unwrap()), "", 0, None).unwrap()["relationships"][0];
+    let detail = ops::get_person(&s.st, &gid).unwrap();
+    let in_detail = &detail["links"][0];
+    assert_eq!(keys(in_graph), edge);
+    assert_eq!(keys(in_proposal), edge);
+    assert!(edge.is_subset(&keys(in_detail)), "{in_detail}");
+    // The graph's link and the person's own link are the same edge, spelled the same.
+    assert_eq!((in_graph["id"].clone(), in_graph["a"].clone(), in_graph["status"].clone()), (in_detail["id"].clone(), in_detail["a"].clone(), in_detail["status"].clone()));
+
+    // What web/js reads: a person's links (sidebar.js) and search cards (main.js).
+    for k in ["id", "role", "other_id", "other_name", "kind", "subtype", "status"] {
+        assert!(in_detail.get(k).is_some(), "sidebar.js reads l.{k}");
+    }
+    let found = ops::search_people(&s.st, "gus", 10, Scope::All, None).unwrap();
+    for k in ["id", "name"] {
+        assert!(found["people"][0].get(k).is_some(), "main.js reads p.{k}");
+    }
+    assert!(found["people"][0].get("display_name").is_none(), "the duplicate key is gone");
+    // The front end must not read the old names.
+    for (file, src) in [("sidebar.js", include_str!("../../../web/js/sidebar.js")), ("main.js", include_str!("../../../web/js/main.js"))] {
+        assert!(!src.contains("link_id"), "{file} still reads link_id");
+    }
+    assert!(!include_str!("../../../web/js/main.js").contains("p.display_name"), "main.js still reads display_name from a card");
 }

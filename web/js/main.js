@@ -412,10 +412,10 @@ async function loadPeople() {
   const list = $('people-list');
   let people;
   if (q) people = (await api('/people?limit=200&q=' + encodeURIComponent(q))).people;
-  else people = app.view.q ? app.view.q.people.slice(0, 500).map((p) => ({ id: p.id, display_name: p.n, birth: p.b })) : [];
+  else people = app.view.q ? app.view.q.people.slice(0, 500).map((p) => ({ id: p.id, name: p.n, birth: p.b })) : [];
   list.replaceChildren(
     ...people.map((p) =>
-      h('button', { class: 'item', onclick: () => { showScreen('quilt'); app.openPerson(p.id); } }, h('b', {}, p.display_name || p.n), h('span', { class: 'muted' }, typeof p.birth === 'string' ? p.birth : '')),
+      h('button', { class: 'item', onclick: () => { showScreen('quilt'); app.openPerson(p.id); } }, h('b', {}, p.name), h('span', { class: 'muted' }, typeof p.birth === 'string' ? p.birth : '')),
     ),
   );
   if (!people.length) list.replaceChildren(h('p', { class: 'muted' }, t('people.none')));
