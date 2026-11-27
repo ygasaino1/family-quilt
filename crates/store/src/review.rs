@@ -95,6 +95,24 @@ impl Store {
         Ok(rows)
     }
 
+    /// Proposals of one author, newest first, `before` an id (exclusive) for the next page. `status` is what an agent
+    /// sees: pending, approved, rejected (decided by the user) or withdrawn (taken back by the agent); it is applied in
+    /// the query, so a page is full whenever more rows match. `limit` is used as given (at most 1001), so a caller can
+    /// ask for one more than it shows to know whether a next page exists.
+    pub fn proposals_page(&self, _ctx: &AccessContext, created_by: &str, status: Option<&str>, before: Option<&str>, limit: usize) -> Result<Vec<ProposalRow>> {
+        let limit = limit.clamp(1, 1001) as i64;
+        let sql = format!(
+            "SELECT {PROPOSAL_COLS} FROM proposal
+             WHERE created_by = ?1
+               AND (?2 IS NULL OR CASE ?2 WHEN 'withdrawn' THEN withdrawn = 1 WHEN 'rejected' THEN status = 'rejected' AND withdrawn = 0 ELSE status = ?2 AND withdrawn = 0 END)
+               AND (?3 IS NULL OR id < ?3)
+             ORDER BY id DESC LIMIT ?4"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![created_by, status, before, limit], proposal_from)?.collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// A short token that changes whenever anything a quilt shows may have changed (any revision, any proposal or decision).
     pub fn data_key(&self, _ctx: &AccessContext) -> Result<String> {
         let (rev, prop, pending, decided): (Option<String>, Option<String>, i64, i64) = self.conn.query_row(

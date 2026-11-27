@@ -234,7 +234,7 @@ fn mcp(p: u16, body: Value, extra: &[(&str, &str)]) -> (u16, String, Value) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn mcp_has_exactly_nine_tools_and_no_way_to_approve_edit_or_delete() {
+async fn mcp_has_exactly_eight_tools_and_no_way_to_approve_edit_or_delete() {
     let s = start().await;
     let p = s.port;
     let (st, head, init) = mcp(
@@ -251,7 +251,7 @@ async fn mcp_has_exactly_nine_tools_and_no_way_to_approve_edit_or_delete() {
     let (_, _, list) = mcp(p, json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}), &[("Mcp-Session-Id", &sid)]);
     let mut names: Vec<String> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
     names.sort();
-    assert_eq!(names, ["create_proposal", "find_relationship", "get_graph", "get_person", "get_proposal", "list_my_proposals", "list_people", "search_people", "withdraw_proposal"]);
+    assert_eq!(names, ["create_proposal", "find_relationship", "get_graph", "get_person", "list_people", "proposals", "search_people", "withdraw_proposal"]);
     for n in &names {
         for banned in ["approve", "reject", "edit", "delete", "update", "remove", "merge", "undo"] {
             assert!(!n.contains(banned), "{n}");
@@ -284,8 +284,8 @@ async fn mcp_has_exactly_nine_tools_and_no_way_to_approve_edit_or_delete() {
     let created: Value = serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     let pid = created["proposal_id"].as_str().or(created["id"].as_str()).unwrap_or_default().to_string();
     assert!(!pid.is_empty(), "{created}");
-    // get_proposal returns the new person with an id; list_people finds the loose end and pages.
-    let r = call(41, "get_proposal", json!({"id": pid}));
+    // `proposals` with an id returns the new person with an id; list_people finds the loose end and pages.
+    let r = call(41, "proposals", json!({"id": pid}));
     let gp: Value = serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(gp["people"][0]["name"], "Mcp Person");
     assert_eq!(gp["people"][0]["proposal_id"], pid.as_str());
@@ -333,7 +333,13 @@ async fn mcp_has_exactly_nine_tools_and_no_way_to_approve_edit_or_delete() {
     assert_eq!(v["groups"].as_object().unwrap().values().map(|x| x.as_u64().unwrap()).sum::<u64>(), v["total"].as_u64().unwrap());
     assert_eq!(call(55, "list_people", json!({"fields": ["nope"]}))["result"]["isError"], true);
     // Another agent's proposal is not readable.
-    assert_eq!(call(45, "get_proposal", json!({"id": "does-not-exist"}))["result"]["isError"], true);
+    let r = call(45, "proposals", json!({"id": "does-not-exist"}));
+    assert_eq!(r["result"]["isError"], true);
+    assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("not_found"), "{r}");
+    // The two tools it replaces are gone.
+    for old in ["get_proposal", "list_my_proposals"] {
+        assert!(call(46, old, json!({}))["result"]["content"][0]["text"].as_str().unwrap().contains("unknown_tool"), "{old}");
+    }
     let (_, status) = ui(p, "GET", "/api/status", None);
     assert_eq!(status["pending_proposals"], 1);
     let (_, list) = ui(p, "GET", "/api/proposals?status=pending", None);
@@ -398,7 +404,7 @@ async fn stdio_bridge_forwards_and_explains_when_the_app_is_closed() {
     .unwrap_or_else(|_| unreachable!());
     assert_eq!(r_closed["result"]["isError"], true);
     assert!(r_closed["result"]["content"][0]["text"].as_str().unwrap().contains("Open the Family Tree app first"));
-    assert_eq!(r_list["result"]["tools"].as_array().unwrap().len(), 9);
+    assert_eq!(r_list["result"]["tools"].as_array().unwrap().len(), 8);
     assert!(r_note.is_none());
     // Without the endpoint file the open case is still "closed"; write it and retry.
     token::write_endpoint(&dir, s.port).unwrap();
@@ -427,7 +433,7 @@ async fn settings_snippets_and_backup() {
     assert!(v["claude_desktop_config"].as_str().unwrap().contains("--mcp-stdio"));
     assert!(v["claude_code_http"].as_str().unwrap().contains("--transport http"));
     let (_, t) = ui(p, "POST", "/api/settings/agent/test", None);
-    assert_eq!(t["tools"].as_array().unwrap().len(), 9);
+    assert_eq!(t["tools"].as_array().unwrap().len(), 8);
     let (st, head, body) = raw(p, &req("GET", "/api/backup", &[("Host", &format!("127.0.0.1:{p}")), ("Sec-Fetch-Site", "same-origin")], None));
     assert_eq!(st, 200);
     assert!(head.contains("attachment"));
@@ -461,11 +467,11 @@ async fn a_proposal_that_is_not_yours_is_told_apart_from_one_that_does_not_exist
         ops::create_proposal(&s.st, "Agent A", &json!({"summary": "x", "people": [{"ref": "n", "full_name": "New Person"}], "relationships": [{"type": "parent_child", "a": gid, "b": "n"}]})).unwrap();
     let pid = made["proposal_id"].as_str().unwrap().to_string();
 
-    assert!(ops::get_proposal(&s.st, "Agent A", &pid).is_ok());
-    let e = ops::get_proposal(&s.st, "Agent B", &pid).unwrap_err();
+    assert!(ops::proposals(&s.st, "Agent A", Some(&pid), "", 0, None).is_ok());
+    let e = ops::proposals(&s.st, "Agent B", Some(&pid), "", 0, None).unwrap_err();
     assert_eq!((e.code.as_str(), e.status.as_u16()), ("not_yours", 403));
     assert!(e.message.contains("Agent A") && e.message.contains("Agent B"), "names both, so a changed client name shows: {}", e.message);
-    let e = ops::get_proposal(&s.st, "Agent B", "nope").unwrap_err();
+    let e = ops::proposals(&s.st, "Agent B", Some("nope"), "", 0, None).unwrap_err();
     assert_eq!((e.code.as_str(), e.status.as_u16()), ("not_found", 404));
 
     // Withdrawing someone else's is also "not yours" and names both; a missing one is "not found".
@@ -546,4 +552,76 @@ async fn search_people_pages_through_the_tool_and_the_rest_door() {
     let c = first["next_cursor"].as_str().unwrap();
     assert_eq!(agent(s.port, "GET", &format!("/agent/v1/people?q=kim&limit=2&after={c}"), "bot", None).0, 200);
     assert_eq!(agent(s.port, "GET", &format!("/agent/v1/people?q=gus&limit=2&after={c}"), "bot", None).0, 422);
+}
+
+/// One `proposals` tool: a list of your own (newest first, paged with a cursor that skips nothing, status filtered
+/// in the query so pages are full) or, with `id`, one proposal in full.
+#[tokio::test(flavor = "multi_thread")]
+async fn proposals_lists_pages_filters_and_shows_one_in_full() {
+    use family_server::ops;
+    let s = start().await;
+    let gid = first_person_id(&s.st);
+    let make = |agent: &str, i: usize| -> String {
+        let r = ops::create_proposal(
+            &s.st,
+            agent,
+            &json!({"summary": format!("p{i}"), "people": [{"ref": "n", "full_name": format!("Person{i} Zzz")}], "relationships": [{"type": "parent_child", "a": gid, "b": "n"}]}),
+        )
+        .unwrap();
+        r["proposal_id"].as_str().unwrap().to_string()
+    };
+    let ids: Vec<String> = (0..6).map(|i| make("Agent A", i)).collect();
+    let other = make("Agent B", 99);
+
+    let page = |agent: &str, status: &str, limit: usize, after: Option<&str>| ops::proposals(&s.st, agent, None, status, limit, after).unwrap();
+    let summaries = |v: &Value| v["proposals"].as_array().unwrap().iter().map(|p| p["summary"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+
+    // Paging 2 at a time: newest first, every proposal once, no empty last page.
+    let (mut seen, mut sizes, mut after) = (vec![], vec![], None::<String>);
+    loop {
+        let v = page("Agent A", "", 2, after.as_deref());
+        sizes.push(summaries(&v).len());
+        seen.extend(summaries(&v));
+        match v["next_cursor"].as_str() {
+            Some(c) => after = Some(c.to_string()),
+            None => break,
+        }
+    }
+    assert_eq!(seen, ["p5", "p4", "p3", "p2", "p1", "p0"]);
+    assert_eq!(sizes, [2, 2, 2]);
+    assert_eq!(summaries(&page("Agent B", "", 20, None)), ["p99"], "only your own");
+
+    // Withdraw p1, p3, p5. Filtering by status happens in the query, so pages are full (not cut then filtered).
+    for i in [1, 3, 5] {
+        ops::withdraw_proposal(&s.st, "Agent A", &ids[i], None).unwrap();
+    }
+    let (mut seen, mut sizes, mut after) = (vec![], vec![], None::<String>);
+    loop {
+        let v = page("Agent A", "pending", 2, after.as_deref());
+        sizes.push(summaries(&v).len());
+        seen.extend(summaries(&v));
+        match v["next_cursor"].as_str() {
+            Some(c) => after = Some(c.to_string()),
+            None => break,
+        }
+    }
+    assert_eq!((seen, sizes), (vec!["p4".to_string(), "p2".into(), "p0".into()], vec![2, 1]));
+    assert_eq!(summaries(&page("Agent A", "withdrawn", 20, None)), ["p5", "p3", "p1"]);
+    assert!(summaries(&page("Agent A", "approved", 20, None)).is_empty());
+    assert_eq!(page("Agent A", "pending", 20, None)["status"], "pending");
+
+    // Bad status, junk cursor, and mixing `id` with list options are errors that say what to do.
+    let e = ops::proposals(&s.st, "Agent A", None, "done", 20, None).unwrap_err();
+    assert!(e.message.contains("pending, approved, rejected, withdrawn"), "{}", e.message);
+    assert!(ops::proposals(&s.st, "Agent A", None, "", 20, Some("junk")).unwrap_err().message.contains("not a cursor"));
+    assert!(ops::proposals(&s.st, "Agent A", Some(&ids[0]), "pending", 20, None).unwrap_err().message.contains("`id`"));
+
+    // One in full, and ownership: not yours vs not found.
+    let one = ops::proposals(&s.st, "Agent A", Some(&ids[0]), "", 20, None).unwrap();
+    assert_eq!((one["id"].as_str(), one["status"].as_str(), one["summary"].as_str()), (Some(ids[0].as_str()), Some("pending"), Some("p0")));
+    assert_eq!((one["people"].as_array().unwrap().len(), one["relationships"].as_array().unwrap().len()), (1, 1));
+    assert!(one.get("reviewer_corrections").is_some() && one.get("changes").is_some());
+    assert_eq!(ops::proposals(&s.st, "Agent B", Some(&ids[0]), "", 20, None).unwrap_err().code, "not_yours");
+    assert_eq!(ops::proposals(&s.st, "Agent B", Some(&other), "", 20, None).unwrap().get("id").and_then(Value::as_str), Some(other.as_str()));
+    assert_eq!(ops::proposals(&s.st, "Agent A", Some("nope"), "", 20, None).unwrap_err().code, "not_found");
 }

@@ -150,8 +150,8 @@ fn the_name_filter_matches_any_name_of_a_person_like_search_does() {
         |q: &str| -> Vec<String> { list_people(&s, &opts(|o| o.name = Some(q.into()))).unwrap()["people"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap().to_string()).collect() };
     let by_search = |q: &str| -> Vec<String> { search_page(&s, q, 50, Scope::Verified, None).unwrap().people.into_iter().map(|p| p.id).collect() };
 
-    assert_eq!(by_list("smith"), [maryam.clone()], "found by an alternate name");
-    assert_eq!(by_list("maryam"), [maryam.clone()], "and by the primary one");
+    assert_eq!(by_list("smith"), vec![maryam.clone()], "found by an alternate name");
+    assert_eq!(by_list("maryam"), vec![maryam.clone()], "and by the primary one");
     assert!(by_list("zzz").is_empty());
     for q in ["smith", "maryam", "mary", "karimi", "omid", "rah", "zzz", "i"] {
         let (mut a, mut b) = (by_list(q), by_search(q));

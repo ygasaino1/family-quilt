@@ -44,36 +44,97 @@ pub fn list_people(st: &Shared, o: &query::ListOpts) -> Result<Value, ApiError> 
 }
 
 /// One of the agent's own proposals in full: its people, links and edits, with ids and current status.
-pub fn get_proposal(st: &Shared, agent: &str, id: &str) -> Result<Value, ApiError> {
-    let store = lock(st);
-    let p = store.get_proposal(&CTX, id)?;
-    let mine = format!("agent:{}", family_review::clean_agent_name(agent));
-    if p.created_by != mine {
-        let theirs = p.created_by.strip_prefix("agent:").unwrap_or(&p.created_by);
-        let me = family_review::clean_agent_name(agent);
-        return Err(ApiError::new(
-            axum::http::StatusCode::FORBIDDEN,
-            "not_yours",
-            &format!("That proposal was sent by '{theirs}' and you are '{me}'. Proposals are private to the agent that sent them; if it was yours, your client name has changed since (it has to stay the same). List your own proposals to find yours."),
-        ));
+/// The statuses an agent can ask for. `withdrawn` is a proposal the agent took back; `rejected` is one the user declined.
+pub const PROPOSAL_STATUSES: [&str; 4] = ["pending", "approved", "rejected", "withdrawn"];
+
+fn proposal_status(p: &family_store::ProposalRow) -> &str {
+    if p.withdrawn {
+        "withdrawn"
+    } else {
+        p.status.as_str()
     }
-    let people: Vec<Value> = store.people_of_proposal(&CTX, id)?.iter().filter_map(|i| query::card(&store, i).ok()).collect();
-    let mut links = vec![];
-    for lid in store.links_of_proposal(&CTX, id)? {
-        let r = store.get_relationship(&CTX, &lid)?;
-        links.push(json!({"id": r.id, "type": r.rel_type, "a": r.person_a, "b": r.person_b, "kind": r.kind, "subtype": r.subtype, "status": r.status}));
-    }
+}
+
+/// What a proposal looks like in a list and, with more, on its own: its state, the user's reason and corrections.
+fn proposal_summary(store: &family_store::Store, p: &family_store::ProposalRow, with_patch: bool) -> Result<Value, ApiError> {
     let changes: Vec<Value> = store
-        .changes_of(&CTX, id)?
+        .changes_of(&CTX, &p.id)?
         .into_iter()
-        .map(|c| json!({"id": c.id, "target_type": c.target_type, "target_id": c.target_id, "op": c.op, "patch": agent_patch(&c.patch), "status": c.status}))
+        .map(|c| {
+            let mut v = json!({"id": c.id, "target_type": c.target_type, "target_id": c.target_id, "op": c.op, "status": c.status});
+            if with_patch {
+                v["patch"] = agent_patch(&c.patch);
+            }
+            v
+        })
         .collect();
-    Ok(json!({
-        "id": p.id, "summary": p.summary, "status": if p.withdrawn { "withdrawn" } else { p.status.as_str() },
-        "created_at": p.created_at, "decided_at": p.decided_at, "rejection_note": p.decision_note,
-        "people": people, "relationships": links, "changes": changes,
-        "note": "People of a rejected or withdrawn proposal are discarded and no longer exist."
-    }))
+    let corrections: Vec<Value> = store
+        .reviewer_edits(&p.id)?
+        .into_iter()
+        .map(|e| json!({"kind": e["kind"], "target_id": e["target_id"], "field": e["field"], "you_proposed": query::agent_value(e["field"].as_str().unwrap_or(""), &e["original"]), "approved_as": query::agent_value(e["field"].as_str().unwrap_or(""), &e["current"]), "note": e["note"]}))
+        .collect();
+    Ok(
+        json!({"id": p.id, "summary": p.summary, "status": proposal_status(p), "created_at": p.created_at, "decided_at": p.decided_at, "rejection_note": p.decision_note, "reviewer_corrections": corrections, "changes": changes}),
+    )
+}
+
+/// Your own proposals. With `id`: that one in full. Without: a page, newest first, filtered by `status` and continued
+/// with `after` (the previous page's `next_cursor`).
+pub fn proposals(st: &Shared, agent: &str, id: Option<&str>, status: &str, limit: usize, after: Option<&str>) -> Result<Value, ApiError> {
+    let me = family_review::clean_agent_name(agent);
+    let created_by = format!("agent:{me}");
+    let store = lock(st);
+    if let Some(id) = id {
+        if !status.is_empty() || after.is_some() {
+            return Err(ApiError::bad_request("`id` returns one proposal; do not combine it with `status`, `limit` or `after`"));
+        }
+        let p = store.get_proposal(&CTX, id)?;
+        if p.created_by != created_by {
+            let theirs = p.created_by.strip_prefix("agent:").unwrap_or(&p.created_by);
+            return Err(ApiError::new(
+                axum::http::StatusCode::FORBIDDEN,
+                "not_yours",
+                &format!("That proposal was sent by '{theirs}' and you are '{me}'. Proposals are private to the agent that sent them; if it was yours, your client name has changed since (it has to stay the same). List your own proposals to find yours."),
+            ));
+        }
+        let people: Vec<Value> = store.people_of_proposal(&CTX, id)?.iter().filter_map(|i| query::card(&store, i).ok()).collect();
+        let mut links = vec![];
+        for lid in store.links_of_proposal(&CTX, id)? {
+            let r = store.get_relationship(&CTX, &lid)?;
+            links.push(json!({"id": r.id, "type": r.rel_type, "a": r.person_a, "b": r.person_b, "kind": r.kind, "subtype": r.subtype, "status": r.status}));
+        }
+        let mut out = proposal_summary(&store, &p, true)?;
+        out["people"] = json!(people);
+        out["relationships"] = json!(links);
+        out["note"] = json!("People of a rejected or withdrawn proposal are discarded and no longer exist.");
+        return Ok(out);
+    }
+    let want = status.trim().to_ascii_lowercase();
+    if !want.is_empty() && !PROPOSAL_STATUSES.contains(&want.as_str()) {
+        return Err(ApiError::from(family_review::ReviewError::from(family_store::StoreError::invalid(
+            "status",
+            format!("'{status}' is not a proposal status: use one of {}", PROPOSAL_STATUSES.join(", ")),
+        ))));
+    }
+    let before = match after {
+        None => None,
+        Some(c) => match c.strip_prefix("p~").filter(|id| !id.is_empty()) {
+            Some(id) => Some(id.to_string()),
+            None => {
+                return Err(ApiError::from(family_review::ReviewError::from(family_store::StoreError::invalid("after", "not a cursor: pass the `next_cursor` value from the previous page unchanged"))))
+            }
+        },
+    };
+    let limit = if limit == 0 { 20 } else { limit.min(100) };
+    // One more than asked for tells us whether a next page exists (and that the cursor is the last row SHOWN).
+    let mut rows = store.proposals_page(&CTX, &created_by, Some(want.as_str()).filter(|w| !w.is_empty()), before.as_deref(), limit + 1)?;
+    let more = rows.len() > limit;
+    rows.truncate(limit);
+    let next_cursor = if more { rows.last().map(|p| format!("p~{}", p.id)) } else { None };
+    let out = rows.iter().map(|p| proposal_summary(&store, p, false)).collect::<Result<Vec<_>, _>>()?;
+    Ok(
+        json!({"proposals": out, "status": if want.is_empty() { "any" } else { want.as_str() }, "next_cursor": next_cursor, "note": "`pending` = waiting for the user; nothing in a pending proposal is final."}),
+    )
 }
 
 pub fn get_person(st: &Shared, id: &str) -> Result<Value, ApiError> {
@@ -137,21 +198,4 @@ pub fn withdraw_proposal(st: &Shared, agent: &str, id: &str, reason: Option<&str
     let by = format!("agent:{}", family_review::clean_agent_name(agent));
     let r = family_review::apply::withdraw(&mut lock(st), id, &by, reason)?;
     Ok(json!({"id": id, "status": "withdrawn", "note": "Nothing of it will appear for review. It does not count as a rejection by the user.", "affected_proposals": r.affected_proposals}))
-}
-
-pub fn list_my_proposals(st: &Shared, agent: &str) -> Result<Value, ApiError> {
-    let store = lock(st);
-    let created_by = format!("agent:{}", family_review::clean_agent_name(agent));
-    let mut out = vec![];
-    for p in store.list_proposals(&CTX, None, Some(&created_by), 50)? {
-        let changes: Vec<Value> =
-            store.changes_of(&CTX, &p.id)?.into_iter().map(|c| json!({"id": c.id, "target_type": c.target_type, "target_id": c.target_id, "op": c.op, "status": c.status})).collect();
-        let corrections: Vec<Value> = store
-            .reviewer_edits(&p.id)?
-            .into_iter()
-            .map(|e| json!({"kind": e["kind"], "target_id": e["target_id"], "field": e["field"], "you_proposed": query::agent_value(e["field"].as_str().unwrap_or(""), &e["original"]), "approved_as": query::agent_value(e["field"].as_str().unwrap_or(""), &e["current"]), "note": e["note"]}))
-            .collect();
-        out.push(json!({"id": p.id, "summary": p.summary, "status": if p.withdrawn { "withdrawn" } else { p.status.as_str() }, "created_at": p.created_at, "decided_at": p.decided_at, "rejection_note": p.decision_note, "reviewer_corrections": corrections, "changes": changes}));
-    }
-    Ok(json!({ "proposals": out, "note": "`pending` = waiting for the user; nothing in a pending proposal is final." }))
 }

@@ -114,7 +114,7 @@ async fn directory(State(st): State<Shared>, Extension(a): Extension<AgentName>,
 
 async fn proposal(State(st): State<Shared>, Extension(a): Extension<AgentName>, Path(id): Path<String>) -> Result<Json<Value>, ApiError> {
     st.log_activity(name(&a), "read a proposal");
-    ops::get_proposal(&st, name(&a), &id).map(Json)
+    ops::proposals(&st, name(&a), Some(&id), "", 0, None).map(Json)
 }
 
 #[derive(Deserialize)]
@@ -177,6 +177,14 @@ async fn withdraw(State(st): State<Shared>, Extension(a): Extension<AgentName>, 
     ops::withdraw_proposal(&st, name(&a), &id, reason.as_deref()).map(Json)
 }
 
-async fn list(State(st): State<Shared>, Extension(a): Extension<AgentName>) -> Result<Json<Value>, ApiError> {
-    ops::list_my_proposals(&st, name(&a)).map(Json)
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProposalsQ {
+    status: Option<String>,
+    limit: Option<usize>,
+    after: Option<String>,
+}
+
+async fn list(State(st): State<Shared>, Extension(a): Extension<AgentName>, Query(q): Query<ProposalsQ>) -> Result<Json<Value>, ApiError> {
+    ops::proposals(&st, name(&a), None, q.status.as_deref().unwrap_or(""), q.limit.unwrap_or(0), q.after.as_deref()).map(Json)
 }
