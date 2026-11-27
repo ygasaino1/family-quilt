@@ -14,6 +14,7 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::Router;
+use family_review::query::Scope;
 use family_review::FieldError;
 use serde_json::{json, Value};
 
@@ -141,7 +142,7 @@ pub fn tool_definitions() -> Value {
         "inputSchema": {"type": "object", "properties": {
             "q": {"type": "string", "description": "Part of a name"},
             "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "description": "Default 50"},
-            "include_pending": {"type": "boolean", "description": "Also show people still waiting for review"}
+            "status": {"type": "string", "enum": ["verified", "pending", "all"], "description": "verified (default), pending (only people still waiting for the user's review) or all"}
         }, "required": ["q"]},
         "annotations": {"readOnlyHint": true}
       },
@@ -176,14 +177,14 @@ pub fn tool_definitions() -> Value {
       },
       {
         "name": "find_relationship",
-        "description": "How are two people related (blood relation with its name, or the closest connection through marriage/adoption/step links)? Uses verified data unless include_pending is true.",
-        "inputSchema": {"type": "object", "properties": {"a": {"type": "string"}, "b": {"type": "string"}, "include_pending": {"type": "boolean"}}, "required": ["a", "b"]},
+        "description": "How are two people related (blood relation with its name, or the closest connection through marriage/adoption/step links)? Uses verified data unless `status` is all.",
+        "inputSchema": {"type": "object", "properties": {"a": {"type": "string"}, "b": {"type": "string"}, "status": {"type": "string", "enum": ["verified", "all"], "description": "verified (default), or all to apply pending changes on top"}}, "required": ["a", "b"]},
         "annotations": {"readOnlyHint": true}
       },
       {
         "name": "get_graph",
         "description": "The people and links around one person: `up` generations of parents and `down` generations of children, plus partners.",
-        "inputSchema": {"type": "object", "properties": {"focus": {"type": "string"}, "up": {"type": "integer", "minimum": 0, "maximum": 10}, "down": {"type": "integer", "minimum": 0, "maximum": 10}, "include_pending": {"type": "boolean"}}, "required": ["focus"]},
+        "inputSchema": {"type": "object", "properties": {"focus": {"type": "string"}, "up": {"type": "integer", "minimum": 0, "maximum": 10}, "down": {"type": "integer", "minimum": 0, "maximum": 10}, "status": {"type": "string", "enum": ["verified", "all"], "description": "verified (default), or all to include pending people and links"}}, "required": ["focus"]},
         "annotations": {"readOnlyHint": true}
       },
       {
@@ -328,7 +329,7 @@ pub fn call_tool(st: &Shared, agent: &str, name: &str, args: &Value) -> Value {
         return tool_error(e);
     }
     let r = match name {
-        "search_people" => ops::search_people(st, &s("q"), n("limit", 50) as usize, b("include_pending")),
+        "search_people" => Scope::parse(&s("status")).map_err(ApiError::from).and_then(|sc| ops::search_people(st, &s("q"), n("limit", 50) as usize, sc)),
         "list_people" => {
             let o = family_review::query::ListOpts {
                 status: s("status"),
@@ -352,8 +353,8 @@ pub fn call_tool(st: &Shared, agent: &str, name: &str, args: &Value) -> Value {
         }
         "get_proposal" => ops::get_proposal(st, agent, &s("id")),
         "get_person" => ops::get_person_history(st, &s("id"), b("history_all")),
-        "find_relationship" => ops::find_relationship(st, &s("a"), &s("b"), b("include_pending")),
-        "get_graph" => ops::get_graph(st, &s("focus"), n("up", 2) as u32, n("down", 2) as u32, b("include_pending")),
+        "find_relationship" => Scope::parse(&s("status")).map_err(ApiError::from).and_then(|sc| ops::find_relationship(st, &s("a"), &s("b"), sc)),
+        "get_graph" => Scope::parse(&s("status")).map_err(ApiError::from).and_then(|sc| ops::get_graph(st, &s("focus"), n("up", 2) as u32, n("down", 2) as u32, sc)),
         "create_proposal" => ops::create_proposal(st, agent, args),
         "withdraw_proposal" => ops::withdraw_proposal(st, agent, &s("id"), Some(&s("reason"))),
         "list_my_proposals" => ops::list_my_proposals(st, agent),
@@ -596,7 +597,7 @@ mod argument_tests {
     fn a_wrong_type_is_an_error_not_a_silent_default() {
         assert_eq!(problems("list_people", json!({"limit": "100"})), [("$.limit".to_string(), "wrong_type")]);
         assert_eq!(problems("list_people", json!({"limit": 2.5})), [("$.limit".to_string(), "wrong_type")]);
-        assert_eq!(problems("search_people", json!({"q": "kim", "include_pending": "true"})), [("$.include_pending".to_string(), "wrong_type")]);
+        assert_eq!(problems("search_people", json!({"q": "kim", "limit": "5"})), [("$.limit".to_string(), "wrong_type")]);
         assert_eq!(problems("find_relationship", json!({"a": 1, "b": "y"})), [("$.a".to_string(), "wrong_type")]);
         assert_eq!(problems("list_people", json!({"fields": "name"})), [("$.fields".to_string(), "wrong_type")]);
         assert_eq!(problems("list_people", json!({"fields": ["name", 3]})), [("$.fields[1]".to_string(), "wrong_type")]);
@@ -617,7 +618,7 @@ mod argument_tests {
     fn good_calls_pass_and_null_means_not_given() {
         assert!(problems("list_people", json!({})).is_empty());
         assert!(problems("list_people", json!({"limit": 5, "sex": "M", "status": "all", "after": null})).is_empty(), "codes and words stay valid");
-        assert!(problems("search_people", json!({"q": "kim", "limit": 1000, "include_pending": true})).is_empty());
+        assert!(problems("search_people", json!({"q": "kim", "limit": 1000, "status": "all"})).is_empty());
         assert!(problems("list_my_proposals", json!({})).is_empty());
         assert!(problems("create_proposal", json!({"summary": "x", "people": [{"ref": "a", "full_name": "A"}]})).is_empty());
         // The proposal's own contents are checked by the proposal validator, with its own paths.

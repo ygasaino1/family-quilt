@@ -10,8 +10,51 @@ use std::collections::{BTreeSet, HashSet, VecDeque};
 
 const CTX: AccessContext = AccessContext::Everything;
 
-pub fn search(store: &Store, text: &str, limit: usize, include_pending: bool) -> Result<Vec<PersonSummary>> {
-    let status = if include_pending { None } else { Some(Status::Verified) };
+/// How much of the tree a read looks at: `status` is `verified` (the default), `pending` or `all`, the same three
+/// words on every tool that takes one. Pending data is what agents proposed and the user has not decided on yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    Verified,
+    Pending,
+    All,
+}
+
+impl Scope {
+    /// No status means verified. Anything but the three words is an error that lists them.
+    pub fn parse(s: &str) -> Result<Scope> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "" | "verified" => Ok(Scope::Verified),
+            "pending" => Ok(Scope::Pending),
+            "all" => Ok(Scope::All),
+            other => Err(bad("status", format!("'{other}' is not a status: use one of verified, pending, all"))),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Scope::Verified => "verified",
+            Scope::Pending => "pending",
+            Scope::All => "all",
+        }
+    }
+
+    /// For reads that follow links (a graph, a relationship): there is no such thing as "only the pending
+    /// part", so `pending` is refused with a message that says what to use. Returns whether pending data is applied.
+    pub fn whole_tree(self) -> Result<bool> {
+        match self {
+            Scope::Verified => Ok(false),
+            Scope::All => Ok(true),
+            Scope::Pending => Err(bad("status", "'pending' only makes sense for searching people; to see pending changes applied on top of the tree use status 'all'".to_string())),
+        }
+    }
+}
+
+pub fn search(store: &Store, text: &str, limit: usize, scope: Scope) -> Result<Vec<PersonSummary>> {
+    let status = match scope {
+        Scope::Verified => Some(Status::Verified),
+        Scope::Pending => Some(Status::Pending),
+        Scope::All => None,
+    };
     Ok(store.search_people(&CTX, &SearchQuery { text: text.to_string(), status, limit })?)
 }
 
@@ -42,8 +85,8 @@ pub fn card(store: &Store, id: &str) -> Result<Value> {
     }))
 }
 
-pub fn search_cards(store: &Store, text: &str, limit: usize, include_pending: bool) -> Result<Vec<Value>> {
-    search(store, text, limit, include_pending)?.iter().map(|s| card(store, &s.id)).collect()
+pub fn search_cards(store: &Store, text: &str, limit: usize, scope: Scope) -> Result<Vec<Value>> {
+    search(store, text, limit, scope)?.iter().map(|s| card(store, &s.id)).collect()
 }
 
 /// `male`, `female`, `other`, `unknown` or the stored codes `M`, `F`, `X`, `U` (any case) -> the stored value.

@@ -42,17 +42,29 @@ async fn guide_reading() -> Response {
     ([(header::CONTENT_TYPE, "text/markdown; charset=utf-8")], family_review::guide::GUIDE_READING).into_response()
 }
 
+/// `status` (verified, pending, all). The older `?pending=1` still means all; an explicit `status` wins.
+fn scope(status: Option<String>, pending: Option<u8>) -> Result<family_review::query::Scope, ApiError> {
+    use family_review::query::Scope;
+    match status {
+        Some(s) => Ok(Scope::parse(&s)?),
+        None if pending == Some(1) => Ok(Scope::All),
+        None => Ok(Scope::Verified),
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PeopleQ {
     q: Option<String>,
     limit: Option<usize>,
+    status: Option<String>,
+    /// Deprecated spelling of `status=all`.
     pending: Option<u8>,
 }
 
 async fn people(State(st): State<Shared>, Extension(a): Extension<AgentName>, Query(q): Query<PeopleQ>) -> Result<Json<Value>, ApiError> {
     st.log_activity(name(&a), "searched people");
-    ops::search_people(&st, q.q.as_deref().unwrap_or(""), q.limit.unwrap_or(50), q.pending == Some(1)).map(Json)
+    ops::search_people(&st, q.q.as_deref().unwrap_or(""), q.limit.unwrap_or(50), scope(q.status, q.pending)?).map(Json)
 }
 
 #[derive(Deserialize)]
@@ -120,13 +132,15 @@ async fn person(State(st): State<Shared>, Extension(a): Extension<AgentName>, Pa
 struct RelQ {
     a: Option<String>,
     b: Option<String>,
+    status: Option<String>,
+    /// Deprecated spelling of `status=all`.
     pending: Option<u8>,
 }
 
 async fn relationship(State(st): State<Shared>, Extension(ag): Extension<AgentName>, Query(q): Query<RelQ>) -> Result<Json<Value>, ApiError> {
     st.log_activity(name(&ag), "asked for a relationship");
     let (Some(a), Some(b)) = (q.a, q.b) else { return Err(ApiError::bad_request("`a` and `b` (person ids) are required")) };
-    ops::find_relationship(&st, &a, &b, q.pending == Some(1)).map(Json)
+    ops::find_relationship(&st, &a, &b, scope(q.status, q.pending)?).map(Json)
 }
 
 #[derive(Deserialize)]
@@ -135,13 +149,15 @@ struct GraphQ {
     focus: Option<String>,
     up: Option<u32>,
     down: Option<u32>,
+    status: Option<String>,
+    /// Deprecated spelling of `status=all`.
     pending: Option<u8>,
 }
 
 async fn graph(State(st): State<Shared>, Extension(a): Extension<AgentName>, Query(q): Query<GraphQ>) -> Result<Json<Value>, ApiError> {
     st.log_activity(name(&a), "read a graph");
     let Some(focus) = q.focus else { return Err(ApiError::bad_request("`focus` (a person id) is required")) };
-    ops::get_graph(&st, &focus, q.up.unwrap_or(2), q.down.unwrap_or(2), q.pending == Some(1)).map(Json)
+    ops::get_graph(&st, &focus, q.up.unwrap_or(2), q.down.unwrap_or(2), scope(q.status, q.pending)?).map(Json)
 }
 
 async fn create(State(st): State<Shared>, Extension(a): Extension<AgentName>, Json(body): Json<Value>) -> Result<(axum::http::StatusCode, Json<Value>), ApiError> {

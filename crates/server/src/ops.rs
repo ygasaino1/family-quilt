@@ -3,7 +3,8 @@
 //! list own proposals. Nothing here edits, deletes, approves or rejects.
 
 use crate::{ApiError, Shared};
-use family_review::{query, submit};
+use family_review::query::{self, Scope};
+use family_review::submit;
 use family_store::AccessContext;
 use serde_json::{json, Value};
 
@@ -21,14 +22,14 @@ fn agent_patch(patch: &Value) -> Value {
     }
 }
 
-pub fn search_people(st: &Shared, q: &str, limit: usize, pending: bool) -> Result<Value, ApiError> {
+pub fn search_people(st: &Shared, q: &str, limit: usize, scope: Scope) -> Result<Value, ApiError> {
     if q.trim().is_empty() {
         return Err(ApiError::bad_request("`q` (part of a name) is required"));
     }
     let store = lock(st);
-    let people = query::search_cards(&store, q, limit, pending)?;
+    let people = query::search_cards(&store, q, limit, scope)?;
     let rejected = previously_rejected(&store, q);
-    Ok(json!({ "people": people, "includes_pending": pending, "previously_rejected": rejected, "tree_version": query::tree_version(&store)? }))
+    Ok(json!({ "people": people, "status": scope.as_str(), "previously_rejected": rejected, "tree_version": query::tree_version(&store)? }))
 }
 
 /// Page through people with filters (the search needs a name; this does not).
@@ -111,11 +112,13 @@ fn previously_rejected(store: &family_store::Store, q: &str) -> Vec<Value> {
     out
 }
 
-pub fn find_relationship(st: &Shared, a: &str, b: &str, pending: bool) -> Result<Value, ApiError> {
+pub fn find_relationship(st: &Shared, a: &str, b: &str, scope: Scope) -> Result<Value, ApiError> {
+    let pending = scope.whole_tree()?;
     Ok(serde_json::to_value(query::relationship(&lock(st), a, b, pending, false)?).unwrap_or_default())
 }
 
-pub fn get_graph(st: &Shared, focus: &str, up: u32, down: u32, pending: bool) -> Result<Value, ApiError> {
+pub fn get_graph(st: &Shared, focus: &str, up: u32, down: u32, scope: Scope) -> Result<Value, ApiError> {
+    let pending = scope.whole_tree()?;
     Ok(query::neighbourhood(&lock(st), focus, up, down, pending)?)
 }
 

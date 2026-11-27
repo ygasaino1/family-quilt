@@ -105,7 +105,7 @@ struct PeopleQ {
 }
 
 async fn people(State(st): State<Shared>, Query(q): Query<PeopleQ>) -> Result<Json<Value>, ApiError> {
-    ops::search_people(&st, q.q.as_deref().unwrap_or(""), q.limit.unwrap_or(50), true).map(Json)
+    ops::search_people(&st, q.q.as_deref().unwrap_or(""), q.limit.unwrap_or(50), family_review::query::Scope::All).map(Json)
 }
 
 async fn person(State(st): State<Shared>, Path(id): Path<String>) -> Result<Json<Value>, ApiError> {
@@ -216,7 +216,7 @@ struct RelQ {
 
 async fn relationship(State(st): State<Shared>, Query(q): Query<RelQ>) -> Result<Json<Value>, ApiError> {
     let (Some(a), Some(b)) = (q.a, q.b) else { return Err(ApiError::bad_request("`a` and `b` are required")) };
-    ops::find_relationship(&st, &a, &b, q.pending == Some(1)).map(Json)
+    ops::find_relationship(&st, &a, &b, if q.pending == Some(1) { family_review::query::Scope::All } else { family_review::query::Scope::Verified }).map(Json)
 }
 
 #[derive(Deserialize)]
@@ -274,7 +274,7 @@ async fn agent_settings(State(st): State<Shared>) -> Json<Value> {
 async fn agent_test(State(st): State<Shared>) -> Json<Value> {
     let tools = crate::mcp::tool_names();
     st.log_activity("settings", "connection test");
-    let n = query::search(&lock(&st), "a", 1, false).map(|v| v.len()).is_ok();
+    let n = query::search(&lock(&st), "a", 1, query::Scope::Verified).map(|v| v.len()).is_ok();
     Json(json!({"ok": n, "tools": tools}))
 }
 

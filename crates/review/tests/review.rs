@@ -1,5 +1,5 @@
 use family_review::apply::{approve, reject, ApproveRequest, ChangeDecision};
-use family_review::query;
+use family_review::query::{self, Scope};
 use family_review::review::review;
 use family_review::submit::submit;
 use family_review::ReviewError;
@@ -62,8 +62,8 @@ fn new_records_are_pending_and_invisible_until_approved() {
     assert_eq!(r.people.len(), 1);
     let zid = r.people[0].id.clone();
     // Verified-only search does not see her; the graph neither.
-    assert!(query::search(&f.s, "Zoe", 10, false).unwrap().is_empty());
-    assert_eq!(query::search(&f.s, "Zoe", 10, true).unwrap().len(), 1);
+    assert!(query::search(&f.s, "Zoe", 10, Scope::Verified).unwrap().is_empty());
+    assert_eq!(query::search(&f.s, "Zoe", 10, Scope::All).unwrap().len(), 1);
     assert!(query::load_graph(&f.s, false).unwrap().index_of(&zid).is_none());
     let v = review(&f.s, &r.proposal_id).unwrap();
     assert_eq!(v.new_people.len(), 1);
@@ -72,7 +72,7 @@ fn new_records_are_pending_and_invisible_until_approved() {
 
     let rep = approve(&mut f.s, &r.proposal_id, &ApproveRequest::default(), "human").unwrap();
     assert_eq!((rep.people_verified, rep.relationships_verified), (1, 1));
-    assert_eq!(query::search(&f.s, "Zoe", 10, false).unwrap().len(), 1);
+    assert_eq!(query::search(&f.s, "Zoe", 10, Scope::Verified).unwrap().len(), 1);
     assert_eq!(f.s.get_proposal(&CTX, &r.proposal_id).unwrap().status, "approved");
     // Revisions of the approval carry the proposal id.
     let revs = f.s.revisions_of(&CTX, "person", &zid).unwrap();
@@ -86,7 +86,7 @@ fn reject_removes_pending_and_changes_nothing() {
         "changes": [{"target_type": "person", "target_id": f.kid, "op": "update", "fields": {"note": {"from": null, "to": "hello"}}}]});
     let r = submit(&mut f.s, "a", &body).unwrap();
     reject(&mut f.s, &r.proposal_id, "human").unwrap();
-    assert!(query::search(&f.s, "New Person", 10, true).unwrap().is_empty());
+    assert!(query::search(&f.s, "New Person", 10, Scope::All).unwrap().is_empty());
     assert_eq!(f.s.get_person(&CTX, &f.kid).unwrap().note, None);
     assert_eq!(f.s.get_proposal(&CTX, &r.proposal_id).unwrap().status, "rejected");
     assert!(approve(&mut f.s, &r.proposal_id, &ApproveRequest::default(), "human").is_err(), "a decided proposal cannot be approved");
@@ -271,7 +271,7 @@ fn rejecting_the_proposal_a_link_depends_on_removes_the_dangling_link_and_report
     assert_eq!(v.changes[0].change.status, "conflicting");
     let rep = approve(&mut f.s, &b.proposal_id, &ApproveRequest::default(), "human").unwrap();
     assert_eq!((rep.people_verified, rep.relationships_verified, rep.changes_applied), (1, 1, 0));
-    assert!(query::search(&f.s, "Pending Pat", 5, true).unwrap().is_empty());
+    assert!(query::search(&f.s, "Pending Pat", 5, Scope::All).unwrap().is_empty());
 }
 
 #[test]
@@ -366,9 +366,9 @@ fn approving_can_leave_out_a_person_and_a_link_and_the_rest_goes_through() {
     assert_eq!((rep.people_verified, rep.relationships_verified), (2, 1));
     assert_eq!((rep.people_excluded, rep.relationships_excluded), (1, 2));
     assert_eq!(f.s.get_proposal(&CTX, &r.proposal_id).unwrap().status, "approved");
-    assert_eq!(query::search(&f.s, "Zoe", 10, false).unwrap().len(), 1);
-    assert_eq!(query::search(&f.s, "Wes", 10, false).unwrap().len(), 1);
-    assert!(query::search(&f.s, "Yan", 10, true).unwrap().is_empty(), "the person left out is gone");
+    assert_eq!(query::search(&f.s, "Zoe", 10, Scope::Verified).unwrap().len(), 1);
+    assert_eq!(query::search(&f.s, "Wes", 10, Scope::Verified).unwrap().len(), 1);
+    assert!(query::search(&f.s, "Yan", 10, Scope::All).unwrap().is_empty(), "the person left out is gone");
     let g = query::load_graph(&f.s, false).unwrap();
     assert!(g.index_of(&zoe).is_some() && g.index_of(&wes).is_some() && g.index_of(&yan).is_none());
     assert_eq!(f.s.relationships_of(&CTX, &wes).unwrap().len(), 0);
@@ -385,7 +385,7 @@ fn leaving_out_unknown_items_is_refused_and_nothing_changes() {
         assert!(matches!(approve(&mut f.s, &r.proposal_id, &req, "human"), Err(ReviewError::Invalid(_))));
     }
     assert_eq!(f.s.get_proposal(&CTX, &r.proposal_id).unwrap().status, "pending");
-    assert_eq!(query::search(&f.s, "New Person", 10, false).unwrap().len(), 0, "still pending");
+    assert_eq!(query::search(&f.s, "New Person", 10, Scope::Verified).unwrap().len(), 0, "still pending");
 }
 
 #[test]

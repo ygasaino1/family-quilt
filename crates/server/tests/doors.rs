@@ -323,7 +323,7 @@ async fn mcp_has_exactly_nine_tools_and_no_way_to_approve_edit_or_delete() {
     };
     assert_eq!(fields(&call(56, "get_person", json!({}))), ("invalid_arguments".to_string(), vec![("$.id".to_string(), "required".to_string())]));
     assert_eq!(fields(&call(57, "list_people", json!({"limit": "100"}))).1, vec![("$.limit".to_string(), "wrong_type".to_string())]);
-    assert_eq!(fields(&call(58, "search_people", json!({"q": "gus", "include_pending": "true"}))).1, vec![("$.include_pending".to_string(), "wrong_type".to_string())]);
+    assert_eq!(fields(&call(58, "search_people", json!({"q": "gus", "limit": "5"}))).1, vec![("$.limit".to_string(), "wrong_type".to_string())]);
     let r = call(53, "list_people", json!({"status": "all", "fields": ["id", "name"], "format": "columns", "limit": 2}));
     let v: Value = serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(v["columns"], json!(["id", "name"]));
@@ -475,4 +475,40 @@ async fn a_proposal_that_is_not_yours_is_told_apart_from_one_that_does_not_exist
     assert_eq!(ops::withdraw_proposal(&s.st, "Agent B", "nope", None).unwrap_err().code, "not_found");
     // The owner can still withdraw it.
     assert!(ops::withdraw_proposal(&s.st, "Agent A", &pid, None).is_ok());
+}
+
+/// `status` is one word with the same three values on every read (verified, pending, all); the older `?pending=1`
+/// on the REST door still means all, and an explicit `status` wins over it.
+#[tokio::test(flavor = "multi_thread")]
+async fn status_is_one_word_on_every_read_and_the_old_pending_flag_still_works() {
+    use family_server::{mcp, ops};
+    let s = start().await;
+    let p = s.port;
+    let gid = first_person_id(&s.st);
+    ops::create_proposal(&s.st, "bot", &json!({"summary": "x", "people": [{"ref": "o", "full_name": "Omid Pending"}], "relationships": [{"type": "parent_child", "a": gid, "b": "o"}]})).unwrap();
+    let names = |v: &Value| v["people"].as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    let get = |path: &str| agent(p, "GET", path, "bot", None);
+
+    assert!(names(&get("/agent/v1/people?q=omid").1).is_empty(), "verified by default");
+    assert_eq!(names(&get("/agent/v1/people?q=omid&status=pending").1), ["Omid Pending"]);
+    let all = get("/agent/v1/people?q=omid&status=all").1;
+    assert_eq!((names(&all).len(), all["status"].as_str()), (1, Some("all")));
+    assert_eq!(names(&get("/agent/v1/people?q=omid&pending=1").1).len(), 1, "the older flag still means all");
+    assert!(names(&get("/agent/v1/people?q=omid&status=verified&pending=1").1).is_empty(), "an explicit status wins");
+    assert_eq!(get("/agent/v1/people?q=omid&status=nope").0, 422);
+
+    // Graph and relationship: verified or all. "pending" alone is refused with a message that says what to use.
+    let kids = |v: &Value| v["people"].as_array().unwrap().len();
+    assert_eq!(kids(&get(&format!("/agent/v1/graph?focus={gid}&down=1")).1), 1);
+    let g = get(&format!("/agent/v1/graph?focus={gid}&down=1&status=all")).1;
+    assert_eq!((kids(&g), g["includes_pending"].as_bool()), (2, Some(true)));
+    assert_eq!(get(&format!("/agent/v1/graph?focus={gid}&down=1&pending=1")).1["includes_pending"], true);
+
+    let r = mcp::call_tool(&s.st, "bot", "get_graph", &json!({"focus": gid, "status": "pending"}));
+    assert_eq!(r["isError"], true);
+    assert!(r["content"][0]["text"].as_str().unwrap().contains("status 'all'"), "{r}");
+    let r = mcp::call_tool(&s.st, "bot", "search_people", &json!({"q": "omid", "status": "pending"}));
+    assert_ne!(r["isError"], true, "{r}");
+    let v: Value = serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!((names(&v), v["status"].as_str()), (vec!["Omid Pending".to_string()], Some("pending")));
 }
