@@ -13,6 +13,7 @@ pub mod bridge;
 pub mod error;
 pub mod mcp;
 pub mod ops;
+pub mod protocol;
 pub mod quilt;
 pub mod token;
 pub mod tree;
