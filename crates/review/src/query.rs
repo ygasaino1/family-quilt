@@ -201,7 +201,7 @@ pub const LIST_DEFAULT: usize = 50;
 pub const LIST_MAX: usize = 2000;
 pub const CARD_FIELDS: &[&str] = &["id", "name", "sex", "birth_year", "death_year", "is_living", "status", "proposal_id", "parents", "partners", "children_count"];
 
-fn bad(field: &str, msg: String) -> crate::ReviewError {
+pub(crate) fn bad(field: &str, msg: String) -> crate::ReviewError {
     StoreError::invalid(field, msg).into()
 }
 

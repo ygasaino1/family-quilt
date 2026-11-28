@@ -113,12 +113,13 @@ async fn proposal(State(st): State<Shared>, Extension(a): Extension<AgentName>, 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HistQ {
-    history: Option<String>,
+    history_limit: Option<usize>,
+    history_before: Option<String>,
 }
 
 async fn person(State(st): State<Shared>, Extension(a): Extension<AgentName>, Path(id): Path<String>, Query(q): Query<HistQ>) -> Result<Json<Value>, ApiError> {
     st.log_activity(name(&a), "read a person");
-    ops::get_person_history(&st, &id, q.history.as_deref() == Some("all")).map(Json)
+    ops::get_person_history(&st, &id, q.history_limit.unwrap_or(0), q.history_before.as_deref()).map(Json)
 }
 
 #[derive(Deserialize)]

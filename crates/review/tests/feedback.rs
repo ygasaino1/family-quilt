@@ -37,7 +37,7 @@ fn invalid(r: std::result::Result<family_review::submit::SubmitResult, ReviewErr
 }
 
 fn events(s: &Store, id: &str) -> Vec<Value> {
-    person_history(s, id, None).unwrap()["history"].as_array().unwrap().clone()
+    person_history(s, id, family_review::history::MAX_LIMIT, None).unwrap()["history"].as_array().unwrap().clone()
 }
 
 #[test]
@@ -134,12 +134,12 @@ fn history_tells_the_story_to_an_agent() {
     let corrected = ev.iter().find(|e| e["event"] == "corrected").unwrap();
     assert_eq!(corrected["changes"][0], json!({"field": "birth_date", "from": "1990", "to": "1991"}));
     assert_eq!(corrected["note"], json!("her passport says 1991"), "the user's one-line reason reaches the agent, tidied");
-    let h = person_history(&s, &zoe, None).unwrap();
+    let h = person_history(&s, &zoe, family_review::history::MAX_LIMIT, None).unwrap();
     assert_eq!(h["user_confirmed"]["birth_date"]["value"], json!("1991"));
 
     // A later hand edit by the user is an `edited` event and stays user-confirmed.
     s.update_person(&CTX, &zoe, PersonPatch { note: Field::Set("born at home".into()), ..Default::default() }, "human").unwrap();
-    let h = person_history(&s, &zoe, None).unwrap();
+    let h = person_history(&s, &zoe, family_review::history::MAX_LIMIT, None).unwrap();
     assert!(h["history"].as_array().unwrap().iter().any(|e| e["event"] == "edited" && e["who"]["type"] == "user"));
     assert_eq!(h["user_confirmed"]["note"]["value"], json!("born at home"));
 }
@@ -162,7 +162,7 @@ fn history_shows_rejected_edits_and_is_capped() {
     for i in 0..30 {
         s.update_person(&CTX, &kim, PersonPatch { note: Field::Set(format!("note {i}")), ..Default::default() }, "human").unwrap();
     }
-    let h = person_history(&s, &kim, Some(family_review::history::DEFAULT_LIMIT)).unwrap();
+    let h = person_history(&s, &kim, family_review::history::DEFAULT_LIMIT, None).unwrap();
     assert_eq!(h["history"].as_array().unwrap().len(), 20);
     assert!(h["history_total"].as_u64().unwrap() > 30);
     assert_eq!(h["history"].as_array().unwrap().last().unwrap()["changes"][0]["to"], json!("note 29"));

@@ -12,8 +12,9 @@ use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
 const CTX: AccessContext = AccessContext::Everything;
-/// Newest events returned unless the caller asks for everything.
+/// Events in a page unless the caller asks for another size, and the most it may ask for.
 pub const DEFAULT_LIMIT: usize = 20;
+pub const MAX_LIMIT: usize = 200;
 const NOTE_MAX: usize = 300;
 /// Columns of a stored row that are bookkeeping, not facts worth reporting as an edit.
 const SKIP: &[&str] = &["id", "created_at", "updated_at", "created_by", "agent_note", "proposal_id", "vault_id", "merged_into", "deleted_at", "status", "sort_order"];
@@ -180,12 +181,28 @@ fn events_for(store: &Store, target_type: &str, id: &str, events: &mut Vec<Event
     Ok(())
 }
 
-fn finish(mut events: Vec<Event>, limit: Option<usize>) -> (Vec<Value>, usize) {
+/// Oldest first. Events are only ever appended in time, so an event's position from the start never changes: that is
+/// what makes a position a safe cursor while new events keep arriving.
+fn sorted(mut events: Vec<Event>) -> Vec<Event> {
     events.sort_by(|a, b| a.at.cmp(&b.at));
-    let total = events.len();
-    let skip = limit.map(|l| total.saturating_sub(l)).unwrap_or(0);
-    let list: Vec<Value> = events.into_iter().skip(skip).map(|e| e.value).collect();
-    (list, total)
+    events
+}
+
+/// A cursor names the first event of the page just shown: `h~<position>~<its time>`. The time is checked on the way
+/// back, so a cursor from a history that has since been rewritten is refused instead of pointing at the wrong place.
+fn cursor_for(position: usize, at: &str) -> String {
+    format!("h~{position}~{at}")
+}
+
+fn position_of(cursor: &str, events: &[Event]) -> Result<usize> {
+    let not_a_cursor = || crate::query::bad("history_before", "not a cursor: pass the `history_next_cursor` value from the previous page unchanged".to_string());
+    let mut parts = cursor.splitn(3, '~');
+    let (Some("h"), Some(pos), Some(at)) = (parts.next(), parts.next(), parts.next()) else { return Err(not_a_cursor()) };
+    let pos: usize = pos.parse().map_err(|_| not_a_cursor())?;
+    match events.get(pos) {
+        Some(e) if e.at == at => Ok(pos),
+        _ => Err(crate::query::bad("history_before", "that cursor no longer matches this history (it changed); start again without `history_before`".to_string())),
+    }
 }
 
 /// Fields a person has set themselves (by hand, or by correcting a proposal), with the value and when: an agent should
@@ -204,8 +221,14 @@ fn user_confirmed(events: &[Value]) -> Value {
     Value::Object(m.into_iter().collect::<Map<_, _>>())
 }
 
-/// `{history, history_total, user_confirmed}` for a person: the person, their names, and their links.
-pub fn person_history(store: &Store, person_id: &str, limit: Option<usize>) -> Result<Value> {
+/// One page of a person's history (the person, their names and their links), as
+/// `{history, history_total, history_next_cursor, user_confirmed}`.
+///
+/// Pages go backwards in time: the first page is the newest `limit` events (0 means [`DEFAULT_LIMIT`], at most
+/// [`MAX_LIMIT`]), `history_next_cursor` (when there are older ones) goes back as `before` for the page before it.
+/// Inside a page events read oldest to newest. `user_confirmed` is worked out from the WHOLE history, not the page:
+/// a value the user set long ago is still theirs.
+pub fn person_history(store: &Store, person_id: &str, limit: usize, before: Option<&str>) -> Result<Value> {
     let person = store.get_person(&CTX, person_id)?;
     let mut events = vec![];
     events_for(store, "person", person_id, &mut events, None)?;
@@ -217,7 +240,16 @@ pub fn person_history(store: &Store, person_id: &str, limit: Option<usize>) -> R
         let other_name = store.get_person(&CTX, other).map(|p| p.display_name).unwrap_or_default();
         let _ = events_for(store, "relationship", &r.id, &mut events, Some(&format!("link with {other_name}")));
     }
-    let (list, total) = finish(events, limit);
-    let confirmed = user_confirmed(&list);
-    Ok(json!({"history": list, "history_total": total, "user_confirmed": confirmed}))
+    let events = sorted(events);
+    let total = events.len();
+    let all: Vec<Value> = events.iter().map(|e| e.value.clone()).collect();
+    let confirmed = user_confirmed(&all);
+    let limit = if limit == 0 { DEFAULT_LIMIT } else { limit.min(MAX_LIMIT) };
+    let end = match before {
+        None => total,
+        Some(c) => position_of(c, &events)?,
+    };
+    let start = end.saturating_sub(limit);
+    let next = if start > 0 { Some(cursor_for(start, &events[start].at)) } else { None };
+    Ok(json!({"history": all[start..end], "history_total": total, "history_next_cursor": next, "user_confirmed": confirmed}))
 }

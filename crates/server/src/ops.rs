@@ -138,15 +138,15 @@ pub fn proposals(st: &Shared, agent: &str, id: Option<&str>, status: &str, limit
 }
 
 pub fn get_person(st: &Shared, id: &str) -> Result<Value, ApiError> {
-    get_person_history(st, id, false)
+    get_person_history(st, id, 0, None)
 }
 
-/// The person with their links and open suggestions, plus `history` (the newest 20 events, or all with `all`),
-/// `history_total` and `user_confirmed`.
-pub fn get_person_history(st: &Shared, id: &str, all: bool) -> Result<Value, ApiError> {
+/// The person with their links and open suggestions, plus one page of `history` (the newest `limit` events, 20 when 0;
+/// older ones with `before` = the previous page's `history_next_cursor`), `history_total` and `user_confirmed`.
+pub fn get_person_history(st: &Shared, id: &str, limit: usize, before: Option<&str>) -> Result<Value, ApiError> {
     let store = lock(st);
     let mut v = serde_json::to_value(query::person_detail(&store, id)?).unwrap_or_default();
-    let h = family_review::history::person_history(&store, id, if all { None } else { Some(family_review::history::DEFAULT_LIMIT) })?;
+    let h = family_review::history::person_history(&store, id, limit, before)?;
     if let (Some(o), Some(h)) = (v.as_object_mut(), h.as_object()) {
         for (k, x) in h {
             o.insert(k.clone(), x.clone());

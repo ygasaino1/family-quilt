@@ -108,7 +108,7 @@ Only by proposal. Propose the **smallest change that fixes the problem**, includ
 
 ## History: learn from what the user decided
 
-`get_person` (`GET /agent/v1/people/{id}`) returns, besides the person, a `history` of the newest 20 events (`history=all` returns everything, `history_total` says how many exist). Each event has `who` (`user`, `agent` with a `name`, or `system`), `event`, `at`, often a `proposal_id`, and `changes` as `{field, from, to}`.
+`get_person` (`GET /agent/v1/people/{id}`) returns, besides the person, a `history` page of the newest events (20 by default, `history_limit` up to 200; `history_total` says how many exist). When there are older ones, `history_next_cursor` is not null: pass it back as `history_before` for the page before. `user_confirmed` always covers the whole history, whatever page you are on. Each event has `who` (`user`, `agent` with a `name`, or `system`), `event`, `at`, often a `proposal_id`, and `changes` as `{field, from, to}`.
 
 * Events: `proposed`, `approved`, `rejected` (with the user's `note`: the reason), `corrected` (the user fixed your value before approving; `from` is yours, `to` is what was kept; an optional `note` says why in one line), `edited` (the user changed it by hand), `edit_proposed` / `edit_approved` / `edit_rejected`, `removal_proposed` / `removal_approved` / `removal_rejected`, `created`, `removed`, `restored`.
 * `user_confirmed` lists fields the user set themselves, with the value. **Do not propose changing those without new evidence**, and say what the evidence is in `agent_note`.

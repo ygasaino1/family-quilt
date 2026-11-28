@@ -664,3 +664,45 @@ async fn links_have_one_shape_and_the_ui_reads_fields_that_exist() {
     }
     assert!(!include_str!("../../../web/js/main.js").contains("p.display_name"), "main.js still reads display_name from a card");
 }
+
+/// `get_person` pages its history: `history_limit` and `history_before` (the previous page's `history_next_cursor`)
+/// over MCP and REST. The old `history=all` / `history_all` are gone.
+#[tokio::test(flavor = "multi_thread")]
+async fn get_person_pages_its_history_over_mcp_and_rest() {
+    use family_server::mcp;
+    let s = start().await;
+    let gid = first_person_id(&s.st);
+    for i in 0..25 {
+        s.st.store.lock().unwrap().update_person(&CTX, &gid, PersonPatch { note: Field::Set(format!("note {i}")), ..Default::default() }, "human").unwrap();
+    }
+    let page = |args: Value| -> Value {
+        let r = mcp::call_tool(&s.st, "bot", "get_person", &args);
+        assert_ne!(r["isError"], true, "{r}");
+        serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap()
+    };
+    let first = page(json!({"id": gid, "history_limit": 10}));
+    assert_eq!(first["history"].as_array().unwrap().len(), 10);
+    let total = first["history_total"].as_u64().unwrap();
+    assert!(total >= 25);
+    let cursor = first["history_next_cursor"].as_str().unwrap();
+    let second = page(json!({"id": gid, "history_limit": 10, "history_before": cursor}));
+    let last_of_second = second["history"].as_array().unwrap().last().unwrap().clone();
+    let first_of_first = first["history"][0].clone();
+    assert_ne!(last_of_second, first_of_first, "pages must not overlap");
+    assert_eq!(second["history_total"].as_u64().unwrap(), total);
+    // The default page is 20 events and says where the older ones start.
+    let default = page(json!({"id": gid}));
+    assert_eq!(default["history"].as_array().unwrap().len(), 20);
+    assert!(default["history_next_cursor"].is_string());
+
+    // REST door: same parameters; the old flag is refused, a junk cursor is a 422.
+    let (code, v) = agent(s.port, "GET", &format!("/agent/v1/people/{gid}?history_limit=5"), "bot", None);
+    assert_eq!((code, v["history"].as_array().unwrap().len()), (200, 5));
+    let c = v["history_next_cursor"].as_str().unwrap();
+    assert_eq!(agent(s.port, "GET", &format!("/agent/v1/people/{gid}?history_limit=5&history_before={c}"), "bot", None).0, 200);
+    assert_ne!(agent(s.port, "GET", &format!("/agent/v1/people/{gid}?history=all"), "bot", None).0, 200);
+    assert_eq!(agent(s.port, "GET", &format!("/agent/v1/people/{gid}?history_before=junk"), "bot", None).0, 422);
+    // Out-of-range limits are caught by the schema check.
+    let r = mcp::call_tool(&s.st, "bot", "get_person", &json!({"id": gid, "history_limit": 0}));
+    assert_eq!(r["isError"], true);
+}
