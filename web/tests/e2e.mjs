@@ -641,7 +641,8 @@ try {
   await check('on a large file the Graphviz layout is not started on its own, but can be asked for', async () => {
     if (await page.locator('#engine-mode').isHidden()) await page.click('#view-btn');
     await page.selectOption('#engine-mode', 'port');
-    await page.waitForFunction(() => document.getElementById('strip').hidden && window.__app.view.q.payload.layout === 'full' && !window.__app.view.anim, null, { timeout: 60000 });
+    // reload() only replaces the layout when the server answers, so until then the OLD layout is idle on screen: wait for the new one.
+    await page.waitForFunction(() => document.getElementById('strip').hidden && window.__app.view.q.payload.layout === 'full' && String(window.__app.view.q.payload.engine).startsWith('own (large file') && !window.__app.view.anim, null, { timeout: 60000 });
     const r = await page.evaluate(() => ({ engine: window.__app.view.q.payload.engine, n: window.__app.view.q.n, btn: !document.getElementById('engine-force').hidden, note: document.getElementById('engine-note').textContent }));
     assert.ok(r.n > 300, 'the test needs more people than the cutoff: ' + r.n);
     assert.ok(r.engine.startsWith('own (large file'), r.engine);
