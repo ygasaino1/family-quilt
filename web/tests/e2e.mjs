@@ -501,6 +501,51 @@ try {
     await page.keyboard.press('Escape');
   });
 
+  // ---- the two screens that read an agent-facing JSON shape: search cards (People) and a person's links (sidebar)
+  await check('people screen: filtering by name lists the matching people by name', async () => {
+    await page.click('#nav-people');
+    await page.fill('#people-filter', 'dee');
+    await page.waitForFunction(() => document.querySelectorAll('#people-list .item').length === 1);
+    const name = (await page.textContent('#people-list .item b')).trim();
+    assert.ok(name.includes('Dee') && name !== 'undefined', 'the filtered list shows a name: ' + name);
+    await page.fill('#people-filter', 'root');
+    await page.waitForFunction(() => document.querySelectorAll('#people-list .item').length >= 4);
+    const names = await page.$$eval('#people-list .item b', (els) => els.map((e) => e.textContent.trim()));
+    assert.ok(names.every((n) => n && n !== 'undefined'), 'every filtered row has a name: ' + names.join(', '));
+    // Clicking a filtered row opens that person in the quilt.
+    await page.fill('#people-filter', 'dee');
+    await page.waitForFunction(() => document.querySelectorAll('#people-list .item').length === 1);
+    await page.click('#people-list .item');
+    await page.waitForSelector('.lrow');
+    // The click moved to the tree with that person open; go back to clear the filter, then return to the tree.
+    await page.click('#nav-people');
+    await page.fill('#people-filter', '');
+    await page.click('#nav-quilt');
+  });
+
+  await check("sidebar: a person's link can be changed and removed (links are addressed by id)", async () => {
+    const eve = await person('Eve', 'Root', 'F', '1990');
+    const link = await ui('/relationships', 'POST', { type: 'parent_child', a: anna.id, b: eve.id, kind: 'adopted' });
+    const linksOf = async (id) => (await ui('/people/' + id)).links;
+    assert.ok((await linksOf(eve.id)).every((l) => l.id && l.link_id === undefined), 'links carry id, not link_id');
+    await page.evaluate((id) => window.__app.openPerson(id), eve.id);
+    await page.waitForSelector('.lrow');
+    // adopted -> foster is not a blood change, so no confirmation is asked
+    await page.selectOption('.lrow select.sel', 'foster');
+    const kind = async () => (await linksOf(eve.id))[0].kind;
+    for (let i = 0; i < 40 && (await kind()) !== 'foster'; i++) await sleep(100);
+    assert.equal(await kind(), 'foster', 'the kind was changed through the link id');
+    assert.equal((await linksOf(eve.id))[0].id, link.id);
+    await page.click('.lrow .danger-ghost');
+    await page.waitForSelector('dialog.dlg[open]');
+    await page.locator('dialog.dlg[open] .actions button:last-child').last().click(); // the confirmation is the topmost dialog
+    for (let i = 0; i < 40 && (await linksOf(eve.id)).length; i++) await sleep(100);
+    assert.equal((await linksOf(eve.id)).length, 0, 'the link was removed through its id');
+    await ui('/people/' + eve.id, 'DELETE');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => window.__app.view.q && window.__app.view.q.n === 4, null, { timeout: 15000 }).catch(() => {});
+  });
+
   await check('big file: quick layout first, progress strip, one glide at the end, selection and view stay put; keep-current cancels', async () => {
     const gen = process.env.GEN_GEDCOM || path.join(path.dirname(exe), 'gen_gedcom');
     const ged = await new Promise((resolve, reject) => {
